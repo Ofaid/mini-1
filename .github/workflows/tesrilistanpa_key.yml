@@ -1,0 +1,83 @@
+name: Build Minimum Release APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. Checkout Kode & Submodule (Wajib recursive!)
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      
+      # 2. Setup Java & Android SDK
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      
+      - uses: android-actions/setup-android@v4
+      
+      # 3. ✅ STEP KRUSIAL: HAPUS PAKSA ndkVersion DARI SUBMODULE
+      # Ini solusi biar nggak perlu edit file submodule manual di HP
+      - name: Fix Humla NDK Config (Remove ndkVersion)
+        run: |
+          echo "🔍 Mengecek file libraries/humla/build.gradle..."
+          if [ -f "libraries/humla/build.gradle" ]; then
+            # Hapus semua baris yang mengandung 'ndkVersion'
+            sed -i '/ndkVersion/d' libraries/humla/build.gradle
+            echo "✅ Baris ndkVersion berhasil dihapus dari humla/build.gradle"
+            
+            # Verifikasi: tampilkan isi file untuk memastikan
+            echo "--- Isi build.gradle setelah fix ---"
+            grep -n "ndk" libraries/humla/build.gradle || echo "Tidak ada lagi referensi ndk!"
+          else
+            echo "⚠️ File libraries/humla/build.gradle tidak ditemukan!"
+            exit 1
+          fi
+      
+      # 4. Install NDK (Jaga-jaga kalau masih butuh untuk compile native code lain)
+      - name: Install Required NDK for Minimum
+        run: |
+          echo "⬇️ Menginstall NDK 25.1.8937393 sebagai backup..."
+          sdkmanager "ndk;25.1.8937393" --no_https
+          echo "✅ NDK berhasil diinstall!"
+      
+      # 5. Build SpongyCastle Dulu (Dependency Wajib Minimum)
+      - name: Build SpongyCastle
+        run: |
+          cd libraries/humla/libs/humla-spongycastle
+          
+          if [ ! -f gradlew ]; then
+            wget -q https://services.gradle.org/distributions/gradle-4.10.3-bin.zip
+            unzip -q gradle-4.10.3-bin.zip
+            GRADLE="./gradle-4.10.3/bin/gradle"
+          else
+            chmod +x gradlew
+            GRADLE="./gradlew"
+          fi
+          
+          # Patch archiveClassifier & Build tanpa Javadoc
+          sed -i 's/archiveClassifier = .*/classifier = "javadoc"/g' build.gradle
+          $GRADLE build -x test -x javadoc \
+            -PsourceCompatibility=1.8 \
+            -PtargetCompatibility=1.8 \
+            --no-daemon
+      
+      # 6. Build APK Release Utama (Minimum FOSS)
+      - name: Build Minimum Release APK
+        run: |
+          chmod +x gradlew
+          # Gunakan task assembleFossRelease sesuai flavor project Minimum
+          ./gradlew :app:assembleFossRelease --no-daemon --stacktrace
+      
+      # 7. Upload Hasil
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Minimum-Simple-Release
+          path: app/build/outputs/apk/foss/release/*.apk

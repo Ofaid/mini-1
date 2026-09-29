@@ -1,0 +1,449 @@
+name: Release signed APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag pointing at the commit to build (for example 3.7.3-minimum.2)
+        required: true
+        type: string
+      prerelease:
+        description: Mark the GitHub release as a prerelease
+        required: true
+        default: true
+        type: boolean
+      expected_version_code:
+        description: Android versionCode reviewed for this release
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Verify, sign and publish FOSS APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: release
+    steps:
+      - name: Validate tag format
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          EXPECTED_VERSION_CODE: ${{ inputs.expected_version_code }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Tag must begin with a numeric x.y.z version so Android versionName is deterministic." >&2
+            exit 1
+          fi
+          if [[ ! "$EXPECTED_VERSION_CODE" =~ ^[1-9][0-9]*$ ]]; then
+            echo "expected_version_code must be a positive integer." >&2
+            exit 1
+          fi
+
+      - name: Checkout reviewed main for release authorization
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind release tag to current reviewed main
+        id: authorize_release
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          git fetch --force --no-tags origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          main_sha=$(git rev-parse --verify "refs/remotes/origin/main^{commit}")
+          tag_sha=$(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}")
+          if [[ "$tag_sha" != "$main_sha" ]]; then
+            echo "Release tag must point to the exact current reviewed origin/main commit." >&2
+            echo "Refusing to check out or execute repository code from the supplied tag." >&2
+            exit 1
+          fi
+          echo "release_sha=$tag_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout authorized release commit with Humla
+        env:
+          RELEASE_SHA: ${{ steps.authorize_release.outputs.release_sha }}
+        run: |
+          git checkout --detach "$RELEASE_SHA"
+          git submodule sync --recursive
+          git submodule update --init --recursive
+
+      - name: Verify required signing secrets
+        env:
+          MINIMUM_RELEASE_KEYSTORE_BASE64: ${{ secrets.MINIMUM_RELEASE_KEYSTORE_BASE64 }}
+          MINIMUM_RELEASE_STORE_PASSWORD: ${{ secrets.MINIMUM_RELEASE_STORE_PASSWORD }}
+          MINIMUM_RELEASE_KEY_ALIAS: ${{ secrets.MINIMUM_RELEASE_KEY_ALIAS }}
+          MINIMUM_RELEASE_KEY_PASSWORD: ${{ secrets.MINIMUM_RELEASE_KEY_PASSWORD }}
+          MINIMUM_RELEASE_APPLICATION_ID: ${{ vars.MINIMUM_RELEASE_APPLICATION_ID }}
+        run: |
+          for value in \
+            MINIMUM_RELEASE_KEYSTORE_BASE64 \
+            MINIMUM_RELEASE_STORE_PASSWORD \
+            MINIMUM_RELEASE_KEY_ALIAS \
+            MINIMUM_RELEASE_KEY_PASSWORD \
+            MINIMUM_RELEASE_APPLICATION_ID; do
+            if [[ -z "${!value}" ]]; then
+              echo "Required release secret $value is not configured." >&2
+              exit 1
+            fi
+          done
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      # STEP SETUP SDK & NDK MANUAL (PASTI JALAN)
+      - name: Setup Android SDK & Install Pinned NDK
+        run: |
+          export ANDROID_HOME=/usr/local/lib/android/sdk
+          export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
+          
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "PATH=$PATH" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/25.1.8937393" >> $GITHUB_ENV
+          
+          yes | sdkmanager --licenses > /dev/null 2>&1
+          sdkmanager "platforms;android-34" "build-tools;34.0.0" "ndk;25.1.8937393" "platform-tools"
+          
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          echo "ndk.dir=$ANDROID_HOME/ndk/25.1.8937393" >> local.properties
+          echo "✅ SDK & NDK Ready"
+
+      # PERBAIKAN UTAMA DI SINI: AUTO-DETECT ALIAS & VALIDASI PASSWORD
+      - name: Materialize signing configuration & Debug Keys
+        env:
+          KEYSTORE_BASE64: ${{ secrets.MINIMUM_RELEASE_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.MINIMUM_RELEASE_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.MINIMUM_RELEASE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.MINIMUM_RELEASE_KEY_PASSWORD }}
+        run: |
+          # 1. Decode Keystore (bersihkan whitespace dulu)
+          CLEAN_B64=$(echo "$KEYSTORE_BASE64" | tr -d '\n\r\t ')
+          KEYSTORE_PATH="$RUNNER_TEMP/minimum-release.jks"
+          printf '%s' "$CLEAN_B64" | base64 --decode > "$KEYSTORE_PATH"
+          
+          # 2. CEK UKURAN FILE (Pastikan tidak kosong)
+          FILE_SIZE=$(wc -c < "$KEYSTORE_PATH")
+          echo " Keystore size: $FILE_SIZE bytes"
+          if [ "$FILE_SIZE" -lt 100 ]; then
+            echo "❌ ERROR: File keystore terlalu kecil/kosong!"
+            exit 1
+          fi
+
+          # 3. DEBUG: LIST SEMUA ALIAS YANG ADA DI KEYSTORE
+          echo " Mencari alias yang valid di dalam keystore..."
+          echo "--- DAFTAR ALIAS ---"
+          keytool -list -keystore "$KEYSTORE_PATH" -storepass "$STORE_PASSWORD" || {
+            echo "❌ Gagal membuka keystore. Kemungkinan STORE_PASSWORD salah!"
+            exit 1
+          }
+          echo "--------------------"
+
+          # 4. SET ENVIRONMENT VARIABLES
+          echo "MINIMUM_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
+          echo "MINIMUM_STORE_PASSWORD=$STORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "MINIMUM_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "MINIMUM_KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
+          
+          # 5. BUAT SIGNING.GRADLE
+          cat > app/signing.gradle <<'GRADLE'
+          android {
+              signingConfigs {
+                  release {
+                      storeFile file(System.getenv('MINIMUM_KEYSTORE_PATH'))
+                      storePassword System.getenv('MINIMUM_STORE_PASSWORD')
+                      keyAlias System.getenv('MINIMUM_KEY_ALIAS')
+                      keyPassword System.getenv('MINIMUM_KEY_PASSWORD')
+                  }
+              }
+          }
+          GRADLE
+          
+          echo "✅ Signing config siap. Melanjutkan ke build..."
+
+      - name: Build patched Spongy Castle jars
+        working-directory: libraries/humla/libs/humla-spongycastle
+        run: |
+          chmod +x ../../gradlew
+          ../../gradlew jar --no-daemon
+
+      - name: Test and assemble signed FOSS release
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:testFossDebugUnitTest :app:assembleFossRelease --no-daemon --stacktrace
+
+      - name: Verify APK signature and identity
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          EXPECTED_VERSION_CODE: ${{ inputs.expected_version_code }}
+          EXPECTED_APPLICATION_ID: ${{ vars.MINIMUM_RELEASE_APPLICATION_ID }}
+        run: |
+          set -o pipefail
+          APK=app/build/outputs/apk/foss/release/mumla-foss-release.apk
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose --print-certs "$APK" | tee "$RUNNER_TEMP/apk-signature.txt"
+          mapfile -t signer_shas < <(sed -n 's/^Signer #[0-9][0-9]* certificate SHA-256 digest: //p' "$RUNNER_TEMP/apk-signature.txt")
+          if [[ ${#signer_shas[@]} -ne 1 || ! "${signer_shas[0]}" =~ ^[0-9a-fA-F]{64}$ ]]; then
+            echo "Release APK must have exactly one reviewed signing certificate; missing or extra signers are refused." >&2
+            exit 1
+          fi
+          signer_sha=${signer_shas[0]}
+          echo "MINIMUM_APK_SIGNER_SHA256=${signer_sha^^}" >> "$GITHUB_ENV"
+          "$ANDROID_HOME/build-tools/34.0.0/aapt" dump badging "$APK" | tee "$RUNNER_TEMP/apk-badging.txt"
+          grep -F "package: name='$EXPECTED_APPLICATION_ID'" "$RUNNER_TEMP/apk-badging.txt"
+          grep -F "versionCode='$EXPECTED_VERSION_CODE'" "$RUNNER_TEMP/apk-badging.txt"
+          grep -F "versionName='$RELEASE_TAG'" "$RUNNER_TEMP/apk-badging.txt"
+          cp "$APK" "minimum-${RELEASE_TAG}-foss.apk"
+          sha256sum "minimum-${RELEASE_TAG}-foss.apk" > "minimum-${RELEASE_TAG}-foss.apk.sha256"
+
+      - name: Test Windows updater and fresh provisioning logic
+        shell: pwsh
+        run: |
+          foreach ($script in @('scripts/update-minimum-device.ps1', 'scripts/provision-minimum-device.ps1')) {
+            $errors = $null
+            $tokens = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $script),
+              [ref]$tokens,
+              [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | Format-List *
+              throw "$script failed PowerShell AST parsing."
+            }
+          }
+          ./tools/verify-cellular-policy.ps1
+          $env:MINIMUM_TEST_SIGNED_APK = (Resolve-Path 'app/build/outputs/apk/foss/release/mumla-foss-release.apk').Path
+          $env:MINIMUM_TEST_EXPECTED_APPLICATION_ID = '${{ vars.MINIMUM_RELEASE_APPLICATION_ID }}'
+          $env:MINIMUM_TEST_EXPECTED_VERSION_CODE = '${{ inputs.expected_version_code }}'
+          $env:MINIMUM_TEST_EXPECTED_VERSION_NAME = '${{ inputs.tag }}'
+          ./tests/update-minimum-device.Tests.ps1
+          ./tests/provision-minimum-device.Tests.ps1
+
+      - name: Build temporary Wi-Fi provisioner
+        run: |
+          ./gradlew -p tools/t99-wifi-provisioner :app:assembleDebug --no-daemon --stacktrace
+          test -f tools/t99-wifi-provisioner/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Package standalone Windows provisioning bundle
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          BUNDLE_NAME="minimum-provisioning-${RELEASE_TAG}"
+          BUNDLE_DIR="$RUNNER_TEMP/$BUNDLE_NAME"
+          OUTPUT_ZIP="$GITHUB_WORKSPACE/$BUNDLE_NAME.zip"
+          EXTRACT_DIR="$RUNNER_TEMP/${BUNDLE_NAME}-extracted"
+          rm -rf -- "$BUNDLE_DIR" "$EXTRACT_DIR"
+          rm -f -- "$OUTPUT_ZIP" "$OUTPUT_ZIP.sha256"
+          mkdir -p "$BUNDLE_DIR/scripts" "$BUNDLE_DIR/assets"
+          cp "Provision Minimum Device.cmd" "$BUNDLE_DIR/"
+          cp "Update Minimum Device.cmd" "$BUNDLE_DIR/"
+          cp "minimum-${RELEASE_TAG}-foss.apk" "$BUNDLE_DIR/minimum-foss.apk"
+          cp "minimum-${RELEASE_TAG}-foss.apk.sha256" "$BUNDLE_DIR/minimum-foss.apk.sha256"
+          sed -i "s#minimum-${RELEASE_TAG}-foss.apk#minimum-foss.apk#" "$BUNDLE_DIR/minimum-foss.apk.sha256"
+          cp scripts/provision-minimum-device.ps1 "$BUNDLE_DIR/scripts/"
+          cp scripts/update-minimum-device.ps1 "$BUNDLE_DIR/scripts/"
+          cp scripts/manage-cellular.ps1 "$BUNDLE_DIR/scripts/"
+          cp scripts/prepare-t99.ps1 "$BUNDLE_DIR/scripts/"
+          cp scripts/prepare-t56.ps1 "$BUNDLE_DIR/scripts/"
+          cp scripts/prepare-ryks.ps1 "$BUNDLE_DIR/scripts/"
+          cp tools/t99-wifi-provisioner/app/build/outputs/apk/debug/app-debug.apk \
+            "$BUNDLE_DIR/assets/t99-wifi-provisioner.apk"
+          cp docs/PROVISIONING_BUNDLE_README.txt "$BUNDLE_DIR/README.txt"
+          cp docs/UPDATER_RUNBOOK.md "$BUNDLE_DIR/UPDATER-README.md"
+          cp docs/CELLULAR_PROVISIONING.md "$BUNDLE_DIR/CELLULAR-README.md"
+          printf '%s\n' "$RELEASE_TAG" > "$BUNDLE_DIR/VERSION.txt"
+          apk_sha=$(sha256sum "$BUNDLE_DIR/minimum-foss.apk" | cut -d' ' -f1)
+          file_entries="$RUNNER_TEMP/release-manifest-files.json"
+          find "$BUNDLE_DIR" -type f -printf '%P\n' | LC_ALL=C sort | while IFS= read -r relative; do
+            jq -cn --arg path "$relative" --arg sha256 "$(sha256sum "$BUNDLE_DIR/$relative" | cut -d' ' -f1 | tr '[:lower:]' '[:upper:]')" \
+              '{path:$path,sha256:$sha256}'
+          done | jq -s . > "$file_entries"
+          jq -n \
+            --arg releaseTag "$RELEASE_TAG" \
+            --argjson versionCode '${{ inputs.expected_version_code }}' \
+            --arg apkSha256 "${apk_sha^^}" \
+            --arg signerSha256 "$MINIMUM_APK_SIGNER_SHA256" \
+            --slurpfile files "$file_entries" \
+            '{schemaVersion:1,releaseTag:$releaseTag,applicationId:"se.lublin.mumla",versionCode:$versionCode,versionName:$releaseTag,apkFile:"minimum-foss.apk",apkSha256:$apkSha256,signerSha256:$signerSha256,rebootRequired:false,migrations:[{id:"CELLULAR_POLICY_V1_T56",fromVersionCodeMax:3070300,toVersionCode:3070301,profiles:["T56"],rebootRequired:true,irreversible:false}],files:$files[0]}' \
+            > "$BUNDLE_DIR/RELEASE-MANIFEST.json"
+          expected_files="$RUNNER_TEMP/provisioning-bundle-expected-files.txt"
+          expected_dirs="$RUNNER_TEMP/provisioning-bundle-expected-dirs.txt"
+          printf '%s\n' \
+            "$BUNDLE_NAME/Provision Minimum Device.cmd" \
+            "$BUNDLE_NAME/Update Minimum Device.cmd" \
+            "$BUNDLE_NAME/README.txt" \
+            "$BUNDLE_NAME/CELLULAR-README.md" \
+            "$BUNDLE_NAME/RELEASE-MANIFEST.json" \
+            "$BUNDLE_NAME/UPDATER-README.md" \
+            "$BUNDLE_NAME/VERSION.txt" \
+            "$BUNDLE_NAME/minimum-foss.apk" \
+            "$BUNDLE_NAME/minimum-foss.apk.sha256" \
+            "$BUNDLE_NAME/scripts/prepare-ryks.ps1" \
+            "$BUNDLE_NAME/scripts/manage-cellular.ps1" \
+            "$BUNDLE_NAME/scripts/prepare-t56.ps1" \
+            "$BUNDLE_NAME/scripts/prepare-t99.ps1" \
+            "$BUNDLE_NAME/scripts/provision-minimum-device.ps1" \
+            "$BUNDLE_NAME/scripts/update-minimum-device.ps1" \
+            "$BUNDLE_NAME/assets/t99-wifi-provisioner.apk" > "$expected_files"
+          sort -o "$expected_files" "$expected_files"
+          printf '%s\n' \
+            "$BUNDLE_NAME/" \
+            "$BUNDLE_NAME/assets/" \
+            "$BUNDLE_NAME/scripts/" > "$expected_dirs"
+          sort -o "$expected_dirs" "$expected_dirs"
+          find "$BUNDLE_DIR" -mindepth 1 \( -type l -o ! \( -type f -o -type d \) \) -print -quit > "$RUNNER_TEMP/provisioning-bundle-special-files.txt"
+          if [[ -s "$RUNNER_TEMP/provisioning-bundle-special-files.txt" ]]; then
+            echo "Provisioning bundle contains a symlink or non-regular entry (filename only):"
+            cat "$RUNNER_TEMP/provisioning-bundle-special-files.txt"
+            exit 1
+          fi
+          find "$BUNDLE_DIR" -type f -printf '%P\n' | sed "s#^#$BUNDLE_NAME/#" | sort > "$RUNNER_TEMP/provisioning-bundle-staged-files.txt"
+          { echo "$BUNDLE_NAME/"; find "$BUNDLE_DIR" -mindepth 1 -type d -printf '%P/\n' | sed "s#^#$BUNDLE_NAME/#"; } | sort > "$RUNNER_TEMP/provisioning-bundle-staged-dirs.txt"
+          if ! diff -u "$expected_files" "$RUNNER_TEMP/provisioning-bundle-staged-files.txt"; then
+            echo "Provisioning bundle staged file manifest differs from the reviewed allowlist."
+            exit 1
+          fi
+          if ! diff -u "$expected_dirs" "$RUNNER_TEMP/provisioning-bundle-staged-dirs.txt"; then
+            echo "Provisioning bundle staged directory manifest differs from the reviewed allowlist."
+            exit 1
+          fi
+          text_pattern='BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|MINIMUM_(RELEASE_)?(KEYSTORE|STORE|KEY_PASSWORD|KEY_ALIAS)(_[A-Z0-9_]+)?=.+'
+          for text_root in "$BUNDLE_DIR"; do
+            while IFS= read -r text_file; do
+              if grep -IlE "$text_pattern" "$text_file" > /dev/null; then
+                echo "Credential-like content pattern found in staged text file (filename only): ${text_file#$BUNDLE_DIR/}"
+                exit 1
+              fi
+            done < <(find "$text_root" -type f \( -name '*.cmd' -o -name '*.ps1' -o -name '*.txt' -o -name '*.md' -o -name '*.json' \) -print)
+          done
+          (
+            cd "$RUNNER_TEMP"
+            zip -q -r "$OUTPUT_ZIP" "$BUNDLE_NAME"
+          )
+          expected_members="$RUNNER_TEMP/provisioning-bundle-expected-members.txt"
+          cat "$expected_dirs" "$expected_files" | sort > "$expected_members"
+          unzip -Z1 "$OUTPUT_ZIP" | sort > "$RUNNER_TEMP/provisioning-bundle-paths.txt"
+          if ! diff -u "$expected_members" "$RUNNER_TEMP/provisioning-bundle-paths.txt"; then
+            echo "Provisioning ZIP raw member list differs from the reviewed allowlist (duplicates or extras are not allowed)."
+            exit 1
+          fi
+          if grep -Eq '(^/|(^|/)\.\.?(/|$)|(^|/)\.(secrets|git)(/|$))' "$RUNNER_TEMP/provisioning-bundle-paths.txt"; then
+            echo "Provisioning ZIP contains an absolute, traversal or hidden private path (path names only)." >&2
+            exit 1
+          fi
+          mkdir -p "$EXTRACT_DIR"
+          unzip -q "$OUTPUT_ZIP" -d "$EXTRACT_DIR"
+          extracted_root="$EXTRACT_DIR/$BUNDLE_NAME"
+          if [[ ! -d "$extracted_root" ]]; then
+            echo "Provisioning ZIP did not extract the expected root directory."
+            exit 1
+          fi
+          find "$extracted_root" -mindepth 1 \( -type l -o ! \( -type f -o -type d \) \) -print -quit > "$RUNNER_TEMP/provisioning-bundle-extracted-special-files.txt"
+          if [[ -s "$RUNNER_TEMP/provisioning-bundle-extracted-special-files.txt" ]]; then
+            echo "Extracted provisioning ZIP contains a symlink or non-regular entry (filename only):"
+            cat "$RUNNER_TEMP/provisioning-bundle-extracted-special-files.txt"
+            exit 1
+          fi
+          find "$extracted_root" -type f -printf '%P\n' | sed "s#^#$BUNDLE_NAME/#" | sort > "$RUNNER_TEMP/provisioning-bundle-extracted-files.txt"
+          { echo "$BUNDLE_NAME/"; find "$extracted_root" -mindepth 1 -type d -printf '%P/\n' | sed "s#^#$BUNDLE_NAME/#"; } | sort > "$RUNNER_TEMP/provisioning-bundle-extracted-dirs.txt"
+          if ! diff -u "$expected_files" "$RUNNER_TEMP/provisioning-bundle-extracted-files.txt"; then
+            echo "Freshly extracted provisioning ZIP file manifest differs from the reviewed allowlist."
+            exit 1
+          fi
+          if ! diff -u "$expected_dirs" "$RUNNER_TEMP/provisioning-bundle-extracted-dirs.txt"; then
+            echo "Freshly extracted provisioning ZIP directory manifest differs from the reviewed allowlist."
+            exit 1
+          fi
+          while IFS= read -r text_file; do
+            if grep -IlE "$text_pattern" "$text_file" > /dev/null; then
+              echo "Credential-like content pattern found in extracted text file (filename only): ${text_file#$extracted_root/}"
+              exit 1
+            fi
+          done < <(find "$extracted_root" -type f \( -name '*.cmd' -o -name '*.ps1' -o -name '*.txt' -o -name '*.md' -o -name '*.json' \) -print)
+          pwsh -NoLogo -NoProfile -Command \
+            ". '$extracted_root/scripts/update-minimum-device.ps1' -LibraryOnly; Read-ReleaseBundle -Root '$extracted_root' | Out-Null; \$identity = Get-ApkManifestIdentity -ApkPath '$extracted_root/minimum-foss.apk'; if (\$identity.ApplicationId -cne 'se.lublin.mumla' -or \$identity.VersionName -cne '$RELEASE_TAG') { throw 'Extracted updater APK identity verification failed.' }; \$signers = @(Get-ApkSignerDigests -ApkPath '$extracted_root/minimum-foss.apk'); if (\$signers.Count -ne 1 -or \$signers[0] -cne '$MINIMUM_APK_SIGNER_SHA256') { throw 'Extracted updater APK signer-set verification failed.' }"
+          output_dir="$(dirname "$OUTPUT_ZIP")"
+          output_name="$(basename "$OUTPUT_ZIP")"
+          (
+            cd "$output_dir"
+            output_sha256="$(sha256sum "$output_name" | cut -d' ' -f1)"
+            printf '%s  %s\n' "$output_sha256" "$output_name" > "$output_name.sha256"
+            expected_checksum_line="$output_sha256  $output_name"
+            if [[ "$(cat "$output_name.sha256")" != "$expected_checksum_line" ]]; then
+              echo "Provisioning ZIP checksum does not bind the exact portable asset filename." >&2
+              exit 1
+            fi
+            sha256sum --check "$output_name.sha256"
+          )
+
+      - name: Prepare reviewed release notes
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          notes="$RUNNER_TEMP/release-notes.md"
+          changes="$RUNNER_TEMP/release-changes.txt"
+          current_commit=$(git rev-parse --verify --quiet "refs/tags/$RELEASE_TAG^{commit}" || true)
+          previous_tag=""
+          if [[ -n "$current_commit" ]]; then
+            while IFS= read -r candidate; do
+              [[ "$candidate" == "$RELEASE_TAG" ]] && continue
+              candidate_commit=$(git rev-parse --verify --quiet "refs/tags/$candidate^{commit}" || true)
+              if [[ -n "$candidate_commit" ]] && git merge-base --is-ancestor "$candidate_commit" "$current_commit"; then
+                previous_tag="$candidate"
+                break
+              fi
+            done < <(git tag --sort=-version:refname)
+          fi
+          if [[ -n "$previous_tag" ]] && git merge-base --is-ancestor "$previous_tag" "$RELEASE_TAG"; then
+            if ! git log --format='- %h %s' "$previous_tag..$RELEASE_TAG" > "$changes"; then
+              git log --format='- %h %s' -n 25 "$RELEASE_TAG" > "$changes"
+            fi
+          else
+            git log --format='- %h %s' -n 25 "${current_commit:-HEAD}" > "$changes"
+          fi
+          sed -E -i 's/(token|password|secret|private[_ -]?key)[=:][^[:space:]]+/\1=<redacted>/Ig' "$changes"
+          {
+            echo "# Minimum $RELEASE_TAG"
+            echo
+            echo "## Reviewed support matrix"
+            echo "- T56: UNIPRO / ZX"
+            echo "- T99: Youdotech / QM011"
+            echo "- RYKS: ELINK / ym_258"
+            echo "- Unknown or ambiguous hardware is rejected before provisioning changes."
+            echo
+            echo "## Physical-test status and known limitations"
+            echo "- Physical acceptance is operator-gated; this workflow does not claim PTT, audio, room-switching or Location success without reviewed device evidence."
+            echo "- Provisioning PASS requires same-ID Ready after reboot; \`-SkipReboot\` is explicitly INCOMPLETE."
+            echo "- The existing-device updater verifies the exact bundle/APK/signer, preserves app data, and refuses unknown migrations or debug-to-release signer changes."
+            echo "- Updater acceptance must be recorded separately for every model/signing channel claimed; no release workflow run itself proves physical acceptance."
+            echo "- T56 network Location requires on-device consent within 120 seconds and remains subject to the documented manual safety boundary."
+            echo
+            echo "## Generated changes"
+            if [[ -s "$changes" ]]; then cat "$changes"; else echo "- No generated commit summary available."; fi
+          } > "$notes"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          prerelease_flag=()
+          if [[ "$PRERELEASE" == "true" ]]; then prerelease_flag+=(--prerelease); fi
+          gh release create "$RELEASE_TAG" \
+            "minimum-${RELEASE_TAG}-foss.apk" \
+            "minimum-${RELEASE_TAG}-foss.apk.sha256" \
+            "minimum-provisioning-${RELEASE_TAG}.zip" \
+            "minimum-provisioning-${RELEASE_TAG}.zip.sha256" \
+            --verify-tag --notes-file "$RUNNER_TEMP/release-notes.md" --title "Minimum $RELEASE_TAG" "${prerelease_flag[@]}"

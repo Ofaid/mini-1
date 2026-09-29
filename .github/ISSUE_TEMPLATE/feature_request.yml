@@ -1,0 +1,39 @@
+name: Feature request
+description: Propose a focused improvement to Minimum.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Android radio application
+        - Configuration portal
+        - Provisioning
+        - APRS tracking
+        - Operations or release
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: Describe the operator or administrator problem, not only the proposed UI.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Explain the observable behavior and how it could be accepted as complete.
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints and safety considerations
+      description: Note affected models, networks, permissions, compatibility, privacy, or TX safety concerns.
+

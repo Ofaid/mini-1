@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 3,
+  "configVersion": 6,
+  "modelProfile": "t99",
+  "service": {
+    "name": "Minimum T99"
+  },
+  "hardware": {
+    "profile": "t99-qm011",
+    "pttKeyCode": 0,
+    "pttScanCode": 0,
+    "pttKeyCodes": [131, 132, 85, 79],
+    "locationTrackingSupported": false,
+    "p1KeyCode": 0,
+    "p2KeyCode": 0,
+    "p3KeyCode": 0
+  }
+}

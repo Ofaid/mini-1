@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 3,
+  "configVersion": 6,
+  "deviceId": "GYZ3DE",
+  "connections": {
+    "public-main": {
+      "username": "E25FGL-T99"
+    }
+  }
+}

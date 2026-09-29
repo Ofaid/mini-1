@@ -1,0 +1,16 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "dev.minimum.wifiprovisioner"
+    compileSdk 36
+
+    defaultConfig {
+        applicationId "dev.minimum.wifiprovisioner"
+        minSdk 21
+        targetSdk 22
+        versionCode 1
+        versionName "1.0"
+    }
+}

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1024" height="1024" viewBox="0 0 600 600"
+     role="img" aria-labelledby="title desc">
+  <title id="title">Minimum app icon foreground</title>
+  <desc id="desc">The standalone Minimum push-to-talk and emergency communication symbol, centered within the Android adaptive icon safe zone.</desc>
+  <g id="minimum-app-icon" transform="translate(300 300) scale(.78) translate(-300 -300)">
+    <path fill="#07192b" d="M80 120H170L295 245V355L170 480H80Q64 480 64 464V136Q64 120 80 120Z"/>
+    <path fill="#07192b" d="M520 120H430L305 245V355L430 480H520Q536 480 536 464V136Q536 120 520 120Z"/>
+    <path fill="none" stroke="#ffffff" stroke-linecap="round" stroke-width="22" d="M157 222Q104 300 157 378"/>
+    <path fill="none" stroke="#ffffff" stroke-linecap="round" stroke-width="22" d="M211 255Q181 300 211 345"/>
+    <path fill="none" stroke="#ffffff" stroke-linecap="round" stroke-width="22" d="M443 222Q496 300 443 378"/>
+    <path fill="none" stroke="#ffffff" stroke-linecap="round" stroke-width="22" d="M389 255Q419 300 389 345"/>
+    <path fill="#ff4b16" d="M281 188Q281 168 301 168H327Q347 168 347 188V416L314 383L281 416Z"/>
+    <path fill="#07192b" d="M314 430L346 470H282Z"/>
+  </g>
+</svg>

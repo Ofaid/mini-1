@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "manifestVersion": 1,
+  "configVersion": 6,
+  "configSchemaVersion": 3,
+  "defaultConfig": "default.json",
+  "modelPath": "models/{modelProfile}.json",
+  "devicePath": "devices/{deviceId}.json",
+  "maxConfigBytes": 262144,
+  "checkIntervalMinutes": 360,
+  "signature": {
+    "algorithm": "none",
+    "required": false
+  }
+}
