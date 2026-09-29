@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 3,
+  "configVersion": 6,
+  "modelProfile": "generic-radio",
+  "hardware": {
+    "profile": "generic-radio",
+    "pttKeyCode": 0,
+    "pttScanCode": 0,
+    "pttKeyCodes": [],
+    "locationTrackingSupported": false,
+    "p1KeyCode": 0,
+    "p2KeyCode": 0,
+    "p3KeyCode": 0
+  }
+}

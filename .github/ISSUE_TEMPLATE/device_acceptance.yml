@@ -1,0 +1,77 @@
+name: Device acceptance result
+description: Record a structured T56, T99, or generic Android field-test result.
+title: "[Device test]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for real-device failures or acceptance evidence. Never publish credentials, bearer tokens, APRS passcodes, certificate fingerprints, exact private coordinates, or unsanitized ADB output. A passing result may have its `bug` label removed during triage.
+  - type: dropdown
+    id: model
+    attributes:
+      label: Model
+      options: [T56, T99, Generic Android]
+    validations:
+      required: true
+  - type: input
+    id: build
+    attributes:
+      label: APK version or commit
+      placeholder: e.g. 5a28ff5-debug
+    validations:
+      required: true
+  - type: dropdown
+    id: scenario
+    attributes:
+      label: Scenario
+      options:
+        - Boot to ready channel
+        - Screen-off PTT
+        - Foreground PTT
+        - Network loss and reconnect
+        - Server or channel switch
+        - Multiple simultaneous speakers
+        - Device ID display
+        - Managed config refresh or rollback
+        - Location or APRS tracking
+        - Provisioning
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options: [PASS, FAIL, PARTIAL, BLOCKED]
+    validations:
+      required: true
+  - type: textarea
+    id: preconditions
+    attributes:
+      label: Preconditions
+      description: State screen/app/network conditions and any relevant setup without secrets.
+    validations:
+      required: true
+  - type: textarea
+    id: procedure
+    attributes:
+      label: Procedure and observations
+      description: Include exact operator actions, timing, visible status, TX/RX behavior, and recovery.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence
+      description: Attach timestamps, screenshots, video, or only the smallest redacted log needed to support the result.
+  - type: checkboxes
+    id: safeguards
+    attributes:
+      label: Safeguards
+      options:
+        - label: Transmissions were supervised and stopped before failure recovery or diagnostic collection.
+          required: true
+        - label: Evidence was reviewed and contains no credentials, tokens, exact private coordinates, or other private device data.
+          required: true
+

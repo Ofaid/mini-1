@@ -1,0 +1,81 @@
+name: Bug report
+description: Report a reproducible problem in the Android app or configuration portal.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for testing Minimum. Do not include server passwords, access tokens, device bearer tokens, APRS passcodes, certificate fingerprints, exact private coordinates, or unredacted configuration files.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Android radio application
+        - Configuration portal
+        - Managed configuration delivery
+        - Provisioning script
+        - APRS tracking
+        - Build or release
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Find the Android version in App info, or provide the tested Git commit.
+      placeholder: e.g. 5a28ff5-debug
+    validations:
+      required: true
+  - type: dropdown
+    id: model
+    attributes:
+      label: Device model
+      options:
+        - T56
+        - T99
+        - Generic Android
+        - Web browser only
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the observed result and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Start with ...
+        2. Press ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Test conditions
+      description: Include screen state, network type, connected server/channel (sanitized), and whether the app was foreground, background, or starting after boot.
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence
+      description: Attach screenshots, video, timestamps, or a minimal redacted log. Do not upload secrets or a complete bugreport.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety checks
+      options:
+        - label: I stopped transmitting before collecting or uploading diagnostics.
+          required: true
+        - label: I checked the report and attachments for credentials, tokens, exact private coordinates, and other private device data.
+          required: true
+

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <application
+        android:allowBackup="false"
+        android:label="Minimum Location Probe"
+        android:theme="@android:style/Theme.Material.NoActionBar">
+        <activity
+            android:name=".LocationProbeActivity"
+            android:excludeFromRecents="true"
+            android:exported="true" />
+        <receiver
+            android:name=".LocationProbeReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="dev.minimum.locationprobe.REPORT" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

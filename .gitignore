@@ -1,0 +1,26 @@
+# Gradle / Android Studio
+build/
+.idea/
+.gradle/
+*.iml
+signing.gradle
+scripts/.secrets/
+
+# Eclipse
+bin/
+gen/
+.settings/
+.classpath
+.project
+
+# Android
+local.properties
+
+# Java
+*.class
+
+# Minimum configuration portal
+web/.next/
+web/node_modules/
+web/tsconfig.tsbuildinfo
+web-dev*.log

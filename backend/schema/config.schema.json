@@ -1,0 +1,193 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://awatchar.github.io/minimum/schema/config.schema.json",
+  "title": "Minimum radio configuration",
+  "type": "object",
+  "required": ["schemaVersion", "configVersion", "radio", "connections", "channels", "ui", "ptt", "hardware"],
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 3 },
+    "configVersion": { "type": "integer", "minimum": 1 },
+    "deviceId": { "type": "string", "pattern": "^(\\*|[A-Z0-9]{6})$" },
+    "service": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "radio": {
+      "type": "object",
+      "required": ["defaultChannel", "autoConnect", "autoReconnect"],
+      "properties": {
+        "defaultChannel": { "$ref": "#/$defs/id" },
+        "autoConnect": { "type": "boolean" },
+        "autoReconnect": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "connections": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 16,
+      "propertyNames": { "$ref": "#/$defs/id" },
+      "additionalProperties": { "$ref": "#/$defs/connection" }
+    },
+    "channels": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": { "$ref": "#/$defs/channel" }
+    },
+    "ui": { "type": "object" },
+    "ptt": {
+      "type": "object",
+      "required": ["maximumTxSeconds", "releaseOnNetworkLoss"],
+      "properties": {
+        "maximumTxSeconds": { "type": "integer", "minimum": 1, "maximum": 120 },
+        "allowScreenOff": { "type": "boolean" },
+        "releaseOnNetworkLoss": { "type": "boolean", "const": true }
+      }
+    },
+    "tracking": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "pttTriggered": { "type": "boolean", "default": true },
+        "aprs": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "sourceCallsign": { "type": "string", "pattern": "^(?!.*-0$)[A-Za-z0-9]{3,6}(-[A-Za-z0-9]{1,2})?$" },
+            "objectName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 9,
+              "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9 _-]{0,7}[A-Za-z0-9_-])?$",
+              "description": "Optional APRS Object label. It is uppercased and padded to nine bytes; when absent, VR- plus the six-character Device ID is used."
+            },
+            "passcode": {
+              "type": "string",
+              "pattern": "^(?:0[0-9]{4}|[0-9]{1,4}|[12][0-9]{4}|3[01][0-9]{3}|32[0-6][0-9]{2}|327[0-5][0-9]|3276[0-7])$",
+              "description": "APRS-IS passcode, 0 through 32767."
+            },
+            "host": { "type": "string", "minLength": 1, "maxLength": 253, "pattern": "^[A-Za-z0-9.-]+$" },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+          },
+          "allOf": [
+            {
+              "if": { "required": ["enabled"], "properties": { "enabled": { "const": true } } },
+              "then": { "required": ["sourceCallsign", "passcode"] }
+            }
+          ],
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "hardware": {
+      "type": "object",
+      "required": ["profile"],
+      "properties": {
+        "profile": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "pttKeyCode": { "type": "integer", "minimum": 0 },
+        "pttScanCode": { "type": "integer", "minimum": 0 },
+        "pttKeyCodes": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "type": "integer", "minimum": 0 }
+        },
+        "pttScanCodes": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "type": "integer", "minimum": 0 }
+        },
+        "p1KeyCode": { "type": "integer", "minimum": 0 },
+        "p1ScanCode": { "type": "integer", "minimum": 0 },
+        "p2KeyCode": { "type": "integer", "minimum": 0 },
+        "p2ScanCode": { "type": "integer", "minimum": 0 },
+        "p3KeyCode": { "type": "integer", "minimum": 0 },
+        "p3ScanCode": { "type": "integer", "minimum": 0 },
+        "greenKeyCode": { "type": "integer", "minimum": 0 },
+        "greenScanCode": { "type": "integer", "minimum": 0 },
+        "menuKeyCode": { "type": "integer", "minimum": 0 },
+        "menuScanCode": { "type": "integer", "minimum": 0 },
+        "redKeyCode": { "type": "integer", "minimum": 0 },
+        "redScanCode": { "type": "integer", "minimum": 0 },
+        "locationTrackingSupported": { "type": "boolean", "default": false }
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "connection": {
+      "type": "object",
+      "required": ["host", "port", "username"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "host": { "type": "string", "minLength": 1, "maxLength": 253, "pattern": "^[A-Za-z0-9.-]+$" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "username": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
+        },
+        "password": { "type": "string", "maxLength": 1024 },
+        "serverCertificateSha256": {
+          "type": "string",
+          "pattern": "^([0-9A-Fa-f]{64}|([0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2})$"
+        },
+        "autoTrustServerCertificate": { "type": "boolean", "default": true }
+      },
+      "additionalProperties": false
+    },
+    "channel": {
+      "type": "object",
+      "required": ["id", "label", "connectionId", "path", "access"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "alias": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "pattern": "^(?!\\s)(?!.*\\s$)[^\\u0000-\\u001F\\u007F]+$",
+          "description": "Optional short name shown on the Minimum radio screen. The full path remains the connection target."
+        },
+        "connectionId": { "$ref": "#/$defs/id" },
+        "path": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^/" },
+        "presetKey": { "type": "string", "pattern": "^P([1-9]|1[0-6])$" },
+        "access": {
+          "type": "object",
+          "required": ["mode"],
+          "properties": {
+            "mode": { "enum": ["none", "public", "protected"] },
+            "token": { "type": "string", "minLength": 1, "maxLength": 1024 },
+            "tokens": {
+              "type": "array",
+              "maxItems": 16,
+              "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+            },
+            "tokenRef": { "type": "string", "minLength": 1, "maxLength": 128 }
+          },
+          "allOf": [
+            {
+              "if": { "properties": { "mode": { "const": "public" } } },
+              "then": { "anyOf": [{ "required": ["token"] }, { "required": ["tokens"] }] }
+            },
+            {
+              "if": { "properties": { "mode": { "const": "protected" } } },
+              "then": { "required": ["tokenRef"] }
+            }
+          ],
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

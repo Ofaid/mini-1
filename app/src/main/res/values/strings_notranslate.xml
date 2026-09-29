@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ~ Copyright (C) 2014 Andrew Comminos
+  ~
+  ~ This program is free software: you can redistribute it and/or modify
+  ~ it under the terms of the GNU General Public License as published by
+  ~ the Free Software Foundation, either version 3 of the License, or
+  ~ (at your option) any later version.
+  ~
+  ~ This program is distributed in the hope that it will be useful,
+  ~ but WITHOUT ANY WARRANTY; without even the implied warranty of
+  ~ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  ~ GNU General Public License for more details.
+  ~
+  ~ You should have received a copy of the GNU General Public License
+  ~ along with this program.  If not, see <http://www.gnu.org/licenses/>.
+  -->
+
+<!-- Here be constants. These resources do NOT need translation. -->
+<resources>
+    <string name="app_name">Minimum</string>
+    <string name="radio_ptt">PTT</string>
+    <string name="radio_loading_config">โหลด Config</string>
+    <string name="radio_not_provisioned">ยังไม่ Provision</string>
+    <string name="radio_config_invalid">Config ไม่ถูกต้อง</string>
+    <string name="radio_config_testing">กำลังทดสอบ Config ใหม่</string>
+    <string name="radio_config_rolled_back">กลับไปใช้ Config เดิมแล้ว</string>
+    <string name="radio_connecting">กำลังเชื่อมต่อ</string>
+    <string name="radio_reconnecting">กำลังต่อใหม่</string>
+    <string name="radio_offline">Offline</string>
+    <string name="radio_service_stopped">Service หยุดทำงาน</string>
+    <string name="radio_ready">พร้อมรับ–ส่ง</string>
+    <string name="radio_transmitting">กำลังส่ง</string>
+    <string name="radio_multiple_talkers">หลายสถานีกำลังพูด</string>
+    <string name="radio_access_denied">ไม่มีสิทธิ์เข้าถึง</string>
+    <string name="radio_microphone_required">ต้องอนุญาตไมโครโฟน</string>
+    <string name="radio_preparing_identity">เตรียม Certificate</string>
+    <string name="radio_certificate_failed">บันทึก Certificate ไม่สำเร็จ</string>
+    <string name="radio_certificate_untrusted">Certificate ไม่ได้รับความเชื่อถือ</string>
+    <string name="radio_certificate_changed">Certificate ไม่ตรงกับ Config</string>
+    <string name="radio_certificate_trusted">เชื่อถือ Certificate อัตโนมัติแล้ว</string>
+    <string name="radio_waiting_for_idle">รอช่องสัญญาณว่าง</string>
+    <string name="radio_press_ok">กดปุ่มเขียวเพื่อยืนยัน</string>
+    <string name="radio_room_missing">ไม่พบห้อง</string>
+    <string name="radio_connection_attempt">ครั้งที่ %1$d · จะลองต่อจนกว่าจะสำเร็จ</string>
+    <string name="radio_retry_forever">กำลังพยายามต่อกลับอัตโนมัติ</string>
+    <string name="radio_connection_blocked">หยุดเพื่อความปลอดภัยของ Certificate</string>
+    <string name="radio_joining_room">กำลังเข้าห้อง</string>
+    <string name="radio_receiving">RX · กำลังรับสัญญาณ</string>
+    <string name="radio_hardware_ptt_hint">กดปุ่ม PTT ที่ตัวเครื่องเพื่อส่ง</string>
+    <string name="radio_tx_timer_label">TX · ระยะเวลาที่ส่ง</string>
+    <string name="radio_tx_failed">ส่งเสียงไม่ได้</string>
+    <string name="radio_tx_failed_detail">ตรวจการเชื่อมต่อและไมโครโฟน</string>
+    <string name="radio_ptt_recovery">PTT ยังไม่ถูกส่ง</string>
+    <string name="radio_ptt_recovery_detail">กำลังเปิดและเชื่อมต่อ กด PTT ใหม่เมื่อขึ้นพร้อม</string>
+    <string name="radio_hold_to_exit">กดค้าง 5 วินาทีเพื่อออก</string>
+    <string name="radio_hold_to_change_room">กดค้าง 1 วินาทีเพื่อเปลี่ยนช่อง</string>
+    <string name="notification_message">%1$s: %2$s</string>
+    <string name="certificate_export_format">mumla_%s.p12</string>
+    <string name="radio_more_talkers">+%1$d คน</string>
+    <string name="radio_channel_alias">%1$s</string>
+    <string name="radio_channel_alias_accessibility">Channel %1$s</string>
+</resources>

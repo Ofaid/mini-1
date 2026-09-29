@@ -1,0 +1,91 @@
+name: Get Signed APK Only
+
+on:
+  workflow_dispatch:
+    inputs:
+      keystore_password:
+        description: Kata sandi keystore
+        required: true
+        type: string
+      key_alias:
+        description: Nama alias kunci
+        required: true
+        type: string
+      key_password:
+        description: Kata sandi kunci
+        required: true
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Setup SDK & NDK
+        run: |
+          export ANDROID_HOME=$HOME/android-sdk
+          mkdir -p "$ANDROID_HOME"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          yes | sdkmanager --licenses || true
+          sdkmanager --sdk_root="$ANDROID_HOME" \
+            "platforms;android-34" \
+            "build-tools;34.0.0" \
+            "ndk;25.1.8937393"
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          echo "ndk.dir=$ANDROID_HOME/ndk/25.1.8937393" >> local.properties
+
+      - name: Generate Keystore & Konfigurasi Tanda Tangan
+        env:
+          STORE_PASS: ${{ inputs.keystore_password }}
+          KEY_ALIAS: ${{ inputs.key_alias }}
+          KEY_PASS: ${{ inputs.key_password }}
+        run: |
+          keytool -genkey -v -keystore "$RUNNER_TEMP/release.jks" \
+            -alias "$KEY_ALIAS" \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass "$STORE_PASS" \
+            -keypass "$KEY_PASS" \
+            -dname "CN=Ofaid, O=Ofaid, L=ID, C=ID"
+
+          echo "MINIMUM_KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+          echo "MINIMUM_STORE_PASSWORD=$STORE_PASS" >> "$GITHUB_ENV"
+          echo "MINIMUM_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "MINIMUM_KEY_PASSWORD=$KEY_PASS" >> "$GITHUB_ENV"
+
+          cat > app/signing.gradle <<'EOF'
+android {
+    signingConfigs {
+        release {
+            storeFile file(System.getenv("MINIMUM_KEYSTORE_PATH"))
+            storePassword System.getenv("MINIMUM_STORE_PASSWORD")
+            keyAlias System.getenv("MINIMUM_KEY_ALIAS")
+            keyPassword System.getenv("MINIMUM_KEY_PASSWORD")
+        }
+    }
+    buildTypes {
+        release {
+            signingConfig signingConfigs.release
+        }
+    }
+}
+EOF
+
+      - name: Bangun APK
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleFossRelease --no-daemon --stacktrace
+
+      - name: Unggah APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: my-signed-apk
+          path: app/build/outputs/apk/foss/release/mumla-foss-release.apk

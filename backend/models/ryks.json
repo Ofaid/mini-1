@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 3,
+  "configVersion": 6,
+  "modelProfile": "ryks",
+  "service": {
+    "name": "Minimum RYKS"
+  },
+  "hardware": {
+    "profile": "ryks-elink-ym-258",
+    "pttKeyCode": 285,
+    "pttScanCode": 216,
+    "pttKeyCodes": [285, 85, 79],
+    "pttScanCodes": [216, 249],
+    "locationTrackingSupported": false,
+    "p1KeyCode": 138,
+    "p1ScanCode": 66,
+    "p2KeyCode": 137,
+    "p2ScanCode": 65,
+    "p3KeyCode": 0,
+    "greenKeyCode": 23,
+    "greenScanCode": 353,
+    "menuKeyCode": 132,
+    "menuScanCode": 60,
+    "redKeyCode": 26,
+    "redScanCode": 116
+  }
+}

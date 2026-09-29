@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 3,
+  "configVersion": 6,
+  "deviceId": "*",
+  "service": {
+    "name": "Minimum Public PTT"
+  },
+  "radio": {
+    "defaultChannel": "main",
+    "autoConnect": false,
+    "autoReconnect": true
+  },
+  "connections": {
+    "public-main": {
+      "name": "Minimum Public PTT",
+      "host": "voice.example.invalid",
+      "port": 64738,
+      "username": "MINIMUM",
+      "autoTrustServerCertificate": true
+    }
+  },
+  "channels": [
+    {
+      "id": "main",
+      "label": "ห้องหลัก",
+      "alias": "MAIN",
+      "connectionId": "public-main",
+      "path": "/PUBLIC/MAIN",
+      "presetKey": "P1",
+      "access": {
+        "mode": "none"
+      }
+    }
+  ],
+  "ui": {
+    "profile": "small-radio",
+    "language": "th",
+    "showChat": false,
+    "showUserList": false,
+    "showChannelTree": false,
+    "allowExit": false,
+    "voicePrompt": true
+  },
+  "ptt": {
+    "maximumTxSeconds": 120,
+    "allowScreenOff": true,
+    "releaseOnNetworkLoss": true
+  },
+  "tracking": {
+    "enabled": false,
+    "pttTriggered": true,
+    "aprs": {
+      "enabled": false,
+      "sourceCallsign": "E25FGL",
+      "host": "ametx.com",
+      "port": 8888
+    }
+  },
+  "hardware": {
+    "profile": "generic-radio",
+    "pttKeyCode": 0,
+    "pttScanCode": 0,
+    "pttKeyCodes": [],
+    "locationTrackingSupported": false,
+    "p1KeyCode": 0,
+    "p2KeyCode": 0,
+    "p3KeyCode": 0
+  },
+  "update": {
+    "checkOnBoot": true,
+    "checkIntervalMinutes": 360,
+    "applyMode": "when-idle"
+  }
+}

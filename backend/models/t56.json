@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 3,
+  "configVersion": 6,
+  "modelProfile": "t56",
+  "service": {
+    "name": "Minimum T56"
+  },
+  "hardware": {
+    "profile": "t56-unipro-zx-l809",
+    "pttKeyCode": 261,
+    "pttScanCode": 216,
+    "pttKeyCodes": [261, 85, 79],
+    "locationTrackingSupported": true,
+    "p1KeyCode": 0,
+    "p2KeyCode": 0,
+    "p3KeyCode": 0
+  }
+}

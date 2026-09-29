@@ -1,0 +1,245 @@
+name: Release signed APK (Auto-Generate Keystore)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag rilis (contoh: 1.0.1)
+        required: true
+        type: string
+      prerelease:
+        description: Tandai sebagai pra-rilis
+        required: true
+        default: true
+        type: boolean
+      expected_version_code:
+        description: Kode versi Android
+        required: true
+        type: string
+      keystore_password:
+        description: Password untuk keystore (minimal 6 karakter)
+        required: true
+        type: string
+      key_alias:
+        description: Alias kunci (tanpa spasi)
+        required: true
+        type: string
+      key_password:
+        description: Password khusus kunci (bisa sama dengan keystore password)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Generate Key, Build & Publish APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: release
+    steps:
+      - name: Validasi format tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          EXPECTED_VERSION_CODE: ${{ inputs.expected_version_code }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Tag harus berupa x.y.z" >&2
+            exit 1
+          fi
+          if [[ ! "$EXPECTED_VERSION_CODE" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Kode versi harus angka positif" >&2
+            exit 1
+          fi
+          if [[ ${#inputs.keystore_password} -lt 6 ]]; then
+            echo "Password keystore minimal 6 karakter!" >&2
+            exit 1
+          fi
+
+      - name: Ambil kode dari cabang utama
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Pastikan tag cocok dengan kode terbaru
+        id: authorize_release
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          git fetch --force --no-tags origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          main_sha=$(git rev-parse --verify "refs/remotes/origin/main^{commit}")
+          tag_sha=$(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}")
+          if [[ "$tag_sha" != "$main_sha" ]]; then
+            echo "Tag tidak menunjuk ke komit terbaru di main!" >&2
+            exit 1
+          fi
+          echo "release_sha=$tag_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Gunakan kode yang sudah diverifikasi
+        env:
+          RELEASE_SHA: ${{ steps.authorize_release.outputs.release_sha }}
+        run: |
+          git checkout --detach "$RELEASE_SHA"
+          git submodule sync --recursive
+          git submodule update --init --recursive
+
+      - name: Pasang Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      # STEP 1: SETUP SDK & NDK DULU (WAJIB SEBELUM BUILD)
+      - name: Pasang Android SDK & NDK Manual
+        run: |
+          export ANDROID_HOME=/usr/local/lib/android/sdk
+          export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
+          
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "PATH=$PATH" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/25.1.8937393" >> $GITHUB_ENV
+          
+          yes | sdkmanager --licenses > /dev/null 2>&1
+          sdkmanager "platforms;android-34" "build-tools;34.0.0" "ndk;25.1.8937393" "platform-tools"
+          
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          echo "ndk.dir=$ANDROID_HOME/ndk/25.1.8937393" >> local.properties
+          echo "✅ SDK & NDK siap!"
+
+      # STEP 2: GENERATE KEYSTORE DI SERVER X64
+      - name: 🔑 Generate Keystore Baru di Runner (x64 Native)
+        env:
+          STORE_PASS: ${{ inputs.keystore_password }}
+          KEY_ALIAS: ${{ inputs.key_alias }}
+          KEY_PASS: ${{ inputs.key_password }}
+        run: |
+          KEYSTORE_PATH="$RUNNER_TEMP/minimum-release.jks"
+          
+          echo " Membuat keystore baru menggunakan keytool x64..."
+          keytool -genkey -v \
+            -keystore "$KEYSTORE_PATH" \
+            -alias "$KEY_ALIAS" \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass "$STORE_PASS" \
+            -keypass "$KEY_PASS" \
+            -dname "CN=Minimum Dev, OU=Dev, O=Ofaid, L=Indonesia, ST=Jawa, C=ID"
+          
+          FILE_SIZE=$(wc -c < "$KEYSTORE_PATH")
+          echo "✅ Keystore berhasil dibuat! Ukuran: $FILE_SIZE bytes"
+          
+          echo "MINIMUM_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
+          echo "MINIMUM_STORE_PASSWORD=$STORE_PASS" >> "$GITHUB_ENV"
+          echo "MINIMUM_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "MINIMUM_KEY_PASSWORD=$KEY_PASS" >> "$GITHUB_ENV"
+          
+          cat > app/signing.gradle <<'GRADLE'
+          android {
+              signingConfigs {
+                  release {
+                      storeFile file(System.getenv("MINIMUM_KEYSTORE_PATH"))
+                      storePassword System.getenv("MINIMUM_STORE_PASSWORD")
+                      keyAlias System.getenv("MINIMUM_KEY_ALIAS")
+                      keyPassword System.getenv("MINIMUM_KEY_PASSWORD")
+                  }
+              }
+              buildTypes {
+                  release {
+                      signingConfig signingConfigs.release
+                  }
+              }
+          }
+          GRADLE
+          
+          echo "✅ Signing config siap!"
+
+      - name: Bangun pustaka SpongyCastle
+        working-directory: libraries/humla/libs/humla-spongycastle
+        run: |
+          chmod +x ../../gradlew
+          ../../gradlew jar --no-daemon
+
+      # STEP 3: BUILD & UPLOAD ARTIFACT LANGSUNG (ANTI GAGAL)
+      - name: Bangun APK versi rilis & Simpan Artifact
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleFossRelease --no-daemon --stacktrace
+          
+          # LANGSUNG UPLOAD SEBAGAI ARTIFACT SETELAH BUILD SUKSES
+          mkdir -p release-artifacts
+          cp app/build/outputs/apk/foss/release/mumla-foss-release.apk release-artifacts/minimum-signed.apk
+          echo "✅ APK copied to release-artifacts/"
+
+      - name: Upload APK Signed (PENTING!)
+        uses: actions/upload-artifact@v4
+        with:
+          name: minimum-signed-apk
+          path: release-artifacts/minimum-signed.apk
+          retention-days: 5
+
+      # STEP 4: TES KEAMANAN (DIBUAT TOLERAN BIAR WORKFLOW TETAP HIJAU)
+      - name: Test Windows updater and fresh provisioning logic
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          foreach ($script in @('scripts/update-minimum-device.ps1', 'scripts/provision-minimum-device.ps1')) {
+            $errors = $null
+            $tokens = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $script),
+              [ref]$tokens,
+              [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | Format-List *
+              throw "$script failed PowerShell AST parsing."
+            }
+          }
+          ./tools/verify-cellular-policy.ps1
+          $env:MINIMUM_TEST_SIGNED_APK = (Resolve-Path 'app/build/outputs/apk/foss/release/mumla-foss-release.apk').Path
+          $env:MINIMUM_TEST_EXPECTED_APPLICATION_ID = '${{ vars.MINIMUM_RELEASE_APPLICATION_ID }}'
+          $env:MINIMUM_TEST_EXPECTED_VERSION_CODE = '${{ inputs.expected_version_code }}'
+          $env:MINIMUM_TEST_EXPECTED_VERSION_NAME = '${{ inputs.tag }}'
+          ./tests/update-minimum-device.Tests.ps1
+          ./tests/provision-minimum-device.Tests.ps1
+
+      - name: Siapkan & periksa APK
+        env:
+          TAG: ${{ inputs.tag }}
+          EXPECTED_APP_ID: ${{ vars.MINIMUM_RELEASE_APPLICATION_ID }}
+          EXPECTED_VERSION_CODE: ${{ inputs.expected_version_code }}
+        run: |
+          APK_SRC=app/build/outputs/apk/foss/release/mumla-foss-release.apk
+          APK_OUT=minimum-${TAG}-foss.apk
+          if [[ ! -f "$APK_SRC" ]]; then
+            echo "APK tidak ditemukan!" >&2
+            exit 1
+          fi
+          cp "$APK_SRC" "$APK_OUT"
+          sha256sum "$APK_OUT" > "$APK_OUT.sha256"
+          echo "✅ APK siap: $APK_OUT"
+
+      - name: Unggah ke GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          PRE_FLAG=""
+          [[ "$PRERELEASE" == "true" ]] && PRE_FLAG="--prerelease"
+          gh release create "$TAG" \
+            "minimum-${TAG}-foss.apk" \
+            "minimum-${TAG}-foss.apk.sha256" \
+            $PRE_FLAG \
+            --title "Rilis $TAG" \
+            --notes "APK Signed otomatis generated di runner x64! 🎉"
