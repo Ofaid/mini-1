@@ -1,248 +1,92 @@
-/*
- * Copyright (C) 2014 Andrew Comminos
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- */
-
 package se.lublin.mumla.service;
 
-import android.annotation.SuppressLint;
 import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.media.AudioAttributes;
 import android.media.AudioManager;
-import android.media.session.MediaSession;
-import android.media.ToneGenerator;
+import android.media.SoundPool;
 import android.net.Uri;
 import android.os.Binder;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.Handler;
 import android.os.IBinder;
-import android.os.Looper;
 import android.os.PowerManager;
-import android.os.SystemClock;
 import android.speech.tts.TextToSpeech;
 import android.util.Log;
-import android.view.KeyEvent;
 import android.widget.Toast;
-
-import androidx.core.content.ContextCompat;
 import androidx.preference.PreferenceManager;
-
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.List;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
-
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Locale;
-
-import se.lublin.humla.Constants;
 import se.lublin.humla.HumlaService;
+import se.lublin.humla.IHumlaSession;
 import se.lublin.humla.exception.AudioException;
 import se.lublin.humla.model.IMessage;
 import se.lublin.humla.model.IUser;
 import se.lublin.humla.model.Message;
 import se.lublin.humla.model.TalkState;
-import se.lublin.humla.util.CleanupRunner;
+import se.lublin.humla.util.HumlaDisconnectedException;
 import se.lublin.humla.util.HumlaException;
 import se.lublin.humla.util.HumlaObserver;
 import se.lublin.mumla.R;
 import se.lublin.mumla.Settings;
+import se.lublin.mumla.service.IChatMessage;
+import se.lublin.mumla.service.LocationCommentReporter;
+import se.lublin.mumla.service.MumlaConnectionNotification;
+import se.lublin.mumla.service.MumlaHotCorner;
+import se.lublin.mumla.service.MumlaReconnectNotification;
 import se.lublin.mumla.service.ipc.TalkBroadcastReceiver;
+import se.lublin.mumla.util.AvatarUtils;
 import se.lublin.mumla.util.HtmlUtils;
-import se.lublin.mumla.radio.RadioPttKeyManager;
-import se.lublin.mumla.radio.RadioPttRecoveryGuard;
-import se.lublin.mumla.radio.RadioPttSafetyPolicy;
-import se.lublin.mumla.radio.RadioReceiveTracker;
-import se.lublin.mumla.radio.RadioDeviceProfile;
-import se.lublin.mumla.radio.RadioHardwareKeyReceiver;
-import se.lublin.mumla.radio.RadioKeyDiagnostics;
-import se.lublin.mumla.radio.RadioNotificationPolicy;
-import se.lublin.mumla.radio.RadioProcessWatchdog;
-import se.lublin.mumla.radio.RadioShellActivity;
-import se.lublin.mumla.radio.RadioConfigRepository;
-import se.lublin.mumla.radio.tracking.AprsTrackingManager;
 
-/**
- * An extension of the Humla service with some added Mumla-exclusive non-standard Mumble features.
- * Created by andrew on 28/07/13.
- */
-public class MumlaService extends HumlaService implements
-        SharedPreferences.OnSharedPreferenceChangeListener,
-        MumlaConnectionNotification.OnActionListener,
-        MumlaReconnectNotification.OnActionListener, IMumlaService {
-    private static final String TAG = MumlaService.class.getName();
-    public static final String ACTION_RADIO_PTT_FAILURE =
-            "se.lublin.mumla.action.RADIO_PTT_FAILURE";
-    public static final String ACTION_RADIO_REQUIRE_PTT_RELEASE =
-            "se.lublin.mumla.action.RADIO_REQUIRE_PTT_RELEASE";
-    public static final String ACTION_RADIO_PTT_RELEASED =
-            "se.lublin.mumla.action.RADIO_PTT_RELEASED";
-    public static final String ACTION_RADIO_PTT_DOWN =
-            "se.lublin.mumla.action.RADIO_PTT_DOWN";
-    public static final String ACTION_RADIO_PTT_UP =
-            "se.lublin.mumla.action.RADIO_PTT_UP";
-    public static final String ACTION_RADIO_TRACKING_POLL =
-            "se.lublin.mumla.action.RADIO_TRACKING_POLL";
-
-    /** Undocumented constant that permits a proximity-sensing wake lock. */
+public class MumlaService extends HumlaService implements SharedPreferences.OnSharedPreferenceChangeListener, MumlaConnectionNotification.OnActionListener, MumlaReconnectNotification.OnActionListener, IMumlaService {
     public static final int PROXIMITY_SCREEN_OFF_WAKE_LOCK = 32;
-    public static final int TTS_THRESHOLD = 250; // Maximum number of characters to read
     public static final int RECONNECT_DELAY = 10000;
-    static final int MAX_MESSAGE_LOG_ENTRIES = 256;
-    private static final long PTT_DELIVERY_CONFIRM_MS = 1500L;
-    private static final long RADIO_WAKE_COOLDOWN_MS = 1000L;
-    private static final long RADIO_WAKE_DURATION_MS = 5000L;
-    private static final Locale THAI_LOCALE = new Locale("th", "TH");
-    private static volatile MumlaService sRunningService;
+    private static final String TAG = MumlaService.class.getName();
+    public static final int TTS_THRESHOLD = 250;
+    
+    // --- MODIFIKASI: Konstanta Audio Stream ---
+    private static final int STREAM_VOICE_CALL = 0;
+    private static final int STREAM_MUSIC = 3;
+    // ------------------------------------------
 
-    /**
-     * Delivers an OEM hardware PTT edge directly when this process already owns the service.
-     *
-     * <p>Android 8+ may reject a receiver's background {@code startService()} even though the
-     * radio service is already alive. The direct path avoids that race and does not retain an edge
-     * for later: a false return means no service was running and the caller may attempt a normal
-     * service start, still subject to the service-owned readiness gate.</p>
-     */
-    public static boolean dispatchRadioPttAction(String action) {
-        MumlaService service = sRunningService;
-        if (service == null) {
-            return false;
-        }
-        if (ACTION_RADIO_PTT_DOWN.equals(action)) {
-            service.wakeRadioDisplay(false);
-            service.onTalkKeyDown();
-            return true;
-        }
-        if (ACTION_RADIO_PTT_UP.equals(action)) {
-            service.onTalkKeyUp();
-            return true;
-        }
-        return false;
-    }
-
-    private Settings mSettings;
-    private MumlaConnectionNotification mNotification;
-    private MumlaMessageNotification mMessageNotification;
-    private MumlaReconnectNotification mReconnectNotification;
-    /** Set before app-owned fields are cleared so late Humla callbacks cannot touch them. */
-    private volatile boolean mDestroying;
-    /** Channel view overlay. */
     private MumlaOverlay mChannelOverlay;
-    /** Proximity lock for handset mode. */
-    private PowerManager.WakeLock mProximityLock;
-    /** Play sound when push to talk key is pressed */
-    private boolean mPTTSoundEnabled;
-    /**
-     * Media-session bridge for hardware/media PTT keys while the Activity is not focused.
-     *
-     * T99 exposes a Button Jack with KEY_MEDIA. A MediaSession is the app-level Android API
-     * that can receive media-button events while the screen is off. F1/F2 and raw GPIO keys
-     * still require an OEM broadcast or privileged input path.
-     */
-    private MediaSession mPttMediaSession;
-    private RadioHardwareKeyReceiver mRadioHardwareKeyReceiver;
-    private boolean mRadioRoomReady;
-    private boolean mPttMediaKeyDown;
-    private final Handler mPttWatchdogHandler = new Handler(Looper.getMainLooper());
-    private boolean mPttInputDown;
-    private boolean mPttWatchdogLockout;
-    private boolean mPttWatchdogArmed;
-    private int mMaximumPttSeconds = RadioPttWatchdogPolicy.DEFAULT_MAXIMUM_TX_SECONDS;
-    private int mArmedPttMaximumSeconds = RadioPttWatchdogPolicy.DEFAULT_MAXIMUM_TX_SECONDS;
-    private final RadioReceiveTracker mRadioReceiveTracker = new RadioReceiveTracker();
-    private final Runnable mRadioProcessWatchdogHeartbeat = new Runnable() {
-        @Override
-        public void run() {
-            if (!isManagedRadioDevice()) {
-                return;
-            }
-            RadioProcessWatchdog.arm(MumlaService.this);
-            mPttWatchdogHandler.postDelayed(this,
-                    RadioProcessWatchdog.HEARTBEAT_INTERVAL_MS);
-        }
-    };
-    private long mPttPressStartedElapsedRealtime;
-    private boolean mPttFailureAlerted;
-    private long mLastRadioWakeElapsedRealtime;
-    private ToneGenerator mRadioAlertTone;
-    private PowerManager.WakeLock mRadioScreenWakeLock;
-    private final Runnable mPttDeliveryFailureCheck = new Runnable() {
-        @Override
-        public void run() {
-            if (mPttWatchdogArmed && isTalking() && mPttPressStartedElapsedRealtime > 0L
-                    && getLastAudioPacketSentElapsedRealtime()
-                    < mPttPressStartedElapsedRealtime) {
-                mPttFailureAlerted = true;
-                playPttFailureAlert();
-            }
-        }
-    };
-    private final Runnable mPttWatchdog = new Runnable() {
-        @Override
-        public void run() {
-            if (!mPttWatchdogArmed || !isTalking()) {
-                return;
-            }
-
-            // Fail safe: stop transmitting and require a real release before another TX.
-            mPttWatchdogArmed = false;
-            mPttWatchdogHandler.removeCallbacks(mPttDeliveryFailureCheck);
-            mPttWatchdogLockout = true;
-            mPttInputDown = false;
-            setPttTalkingState(false);
-            playPttFailureAlert();
-            Log.w(TAG, "PTT watchdog stopped transmission after "
-                    + mArmedPttMaximumSeconds + " seconds");
-        }
-    };
-    /** Try to shorten spoken messages when using TTS */
-    private boolean mShortTtsMessagesEnabled;
-    /**
-     * True if an error causing disconnection has been dismissed by the user.
-     * This should serve as a hint not to bother the user.
-     */
     private boolean mErrorShown;
+    private MumlaHotCorner mHotCorner;
     private List<IChatMessage> mMessageLog;
+    private MumlaMessageNotification mMessageNotification;
+    private MumlaConnectionNotification mNotification;
+    private boolean mPTTSoundEnabled;
+    private PowerManager.WakeLock mProximityLock;
+    private MumlaReconnectNotification mReconnectNotification;
+    private int mRogerBeepSoundId;
+    private String mRogerBeepTone;
+    private boolean mSelfWasTalkingPtt;
+    private Settings mSettings;
+    private boolean mShortTtsMessagesEnabled;
+    private SoundPool mSoundPool;
     private boolean mSuppressNotifications;
-    private AprsTrackingManager mAprsTrackingManager;
-
     private TextToSpeech mTTS;
+    private BroadcastReceiver mTalkReceiver;
     private TextToSpeech.OnInitListener mTTSInitListener = new TextToSpeech.OnInitListener() {
         @Override
         public void onInit(int status) {
-            if(status == TextToSpeech.ERROR) {
+            if (status == -1) {
                 logWarning(getString(R.string.tts_failed));
-                return;
-            }
-            if (mTTS != null) {
-                int thai = mTTS.isLanguageAvailable(THAI_LOCALE);
-                if (thai >= TextToSpeech.LANG_AVAILABLE) {
-                    mTTS.setLanguage(THAI_LOCALE);
-                } else {
-                    Log.w(TAG, "Thai TTS voice is not installed; retaining engine default");
-                }
             }
         }
     };
-
-    /** The view representing the hot corner. */
-    private MumlaHotCorner mHotCorner;
     private MumlaHotCorner.MumlaHotCornerListener mHotCornerListener = new MumlaHotCorner.MumlaHotCornerListener() {
         @Override
         public void onHotCornerDown() {
@@ -254,171 +98,118 @@ public class MumlaService extends HumlaService implements
             onTalkKeyUp();
         }
     };
-
-    private BroadcastReceiver mTalkReceiver;
-
     private HumlaObserver mObserver = new HumlaObserver() {
-        @Override
         public void onConnecting() {
-            // Remove old notification left from reconnect,
             if (mReconnectNotification != null) {
                 mReconnectNotification.hide();
                 mReconnectNotification = null;
             }
-
-            final String tor = mSettings.isTorEnabled() ? " (Tor)" : "";
-            mNotification = MumlaConnectionNotification.create(MumlaService.this,
-                    getString(R.string.mumlaConnecting) + tor,
-                    MumlaService.this);
+            String tor = mSettings.isTorEnabled() ? " (Tor)" : "";
+            mNotification = MumlaConnectionNotification.create(MumlaService.this, getString(R.string.mumlaConnecting) + tor, MumlaService.this);
             mNotification.show();
-
             mErrorShown = false;
         }
 
-        @Override
         public void onConnected() {
             if (mNotification != null) {
-                final String tor = mSettings.isTorEnabled() ? " (Tor)" : "";
+                String tor = mSettings.isTorEnabled() ? " (Tor)" : "";
                 mNotification.setCustomContentText(getString(R.string.connected) + tor);
                 mNotification.setActionsShown(true);
                 mNotification.show();
             }
+            reportLocationComment();
+            reportCachedAvatar();
         }
 
-        @Override
         public void onDisconnected(HumlaException e) {
-            mRadioReceiveTracker.clear();
-            wakeRadioDisplay();
             if (mNotification != null) {
                 mNotification.hide();
                 mNotification = null;
             }
             if (e != null && !mSuppressNotifications) {
-                mReconnectNotification =
-                        MumlaReconnectNotification.show(MumlaService.this,
-                                e.getMessage() + (mSettings.isTorEnabled() ? " (Tor)" : ""),
-                                isReconnecting(), MumlaService.this);
+                mReconnectNotification = MumlaReconnectNotification.show(MumlaService.this, e.getMessage() + (mSettings.isTorEnabled() ? " (Tor)" : ""), isReconnecting(), MumlaService.this);
             }
         }
 
-        @Override
         public void onUserConnected(IUser user) {
-            if (user.getTextureHash() != null &&
-                    user.getTexture() == null) {
-                // Request avatar data if available.
+            if (user.getTextureHash() != null && user.getTexture() == null) {
                 requestAvatar(user.getSession());
             }
         }
 
-        @Override
         public void onUserStateUpdated(IUser user) {
-            if (user == null) {
-                return;
-            }
-
-            int selfSession;
+            String contentText;
+            if (user == null) return;
             try {
-                selfSession = getSessionId();
+                int selfSession = getSessionId();
+                if (user.getSession() == selfSession) {
+                    mSettings.setMutedAndDeafened(user.isSelfMuted(), user.isSelfDeafened());
+                    if (mNotification != null) {
+                        if (user.isSelfMuted() && user.isSelfDeafened()) {
+                            contentText = getString(R.string.status_notify_muted_and_deafened);
+                        } else if (user.isSelfMuted()) {
+                            contentText = getString(R.string.status_notify_muted);
+                        } else {
+                            contentText = getString(R.string.connected);
+                        }
+                        mNotification.setCustomContentText(contentText);
+                        mNotification.show();
+                    }
+                }
+                if (user.getTextureHash() != null && user.getTexture() == null) {
+                    requestAvatar(user.getSession());
+                }
             } catch (IllegalStateException e) {
                 Log.d(TAG, "exception in onUserStateUpdated: " + e);
-                return;
-            }
-
-            if (user.getSession() == selfSession) {
-                mSettings.setMutedAndDeafened(user.isSelfMuted(), user.isSelfDeafened()); // Update settings mute/deafen state
-                if(mNotification != null) {
-                    String contentText;
-                    if (user.isSelfMuted() && user.isSelfDeafened())
-                        contentText = getString(R.string.status_notify_muted_and_deafened);
-                    else if (user.isSelfMuted())
-                        contentText = getString(R.string.status_notify_muted);
-                    else
-                        contentText = getString(R.string.connected);
-                    mNotification.setCustomContentText(contentText);
-                    mNotification.show();
-                }
-            }
-
-            if (user.getTextureHash() != null && user.getTexture() == null) {
-                // Update avatar data if available.
-                requestAvatar(user.getSession());
             }
         }
 
-        @Override
         public void onMessageLogged(IMessage message) {
-            // Split on / strip all HTML tags.
+            String ttsMessage;
+            String urlHostname;
             Document parsedMessage = Jsoup.parseBodyFragment(message.getMessage());
             String strippedMessage = parsedMessage.text();
-
-            String ttsMessage;
-            if(mShortTtsMessagesEnabled) {
-                for (Element anchor : parsedMessage.getElementsByTag("A")) {
-                    // Get just the domain portion of links
+            if (mShortTtsMessagesEnabled) {
+                Iterator it = parsedMessage.getElementsByTag("A").iterator();
+                while (it.hasNext()) {
+                    Element anchor = (Element) it.next();
                     String href = anchor.attr("href");
-                    // Only shorten anchors without custom text
-                    if (href != null && href.equals(anchor.text())) {
-                        String urlHostname = HtmlUtils.getHostnameFromLink(href);
-                        if (urlHostname != null) {
-                            anchor.text(getString(R.string.chat_message_tts_short_link, urlHostname));
-                        }
+                    if (href != null && href.equals(anchor.text()) && (urlHostname = HtmlUtils.getHostnameFromLink(href)) != null) {
+                        anchor.text(getString(R.string.chat_message_tts_short_link, new Object[]{urlHostname}));
                     }
                 }
                 ttsMessage = parsedMessage.text();
             } else {
                 ttsMessage = strippedMessage;
             }
-
-            String formattedTtsMessage = getString(R.string.notification_message,
-                    message.getActorName(), ttsMessage);
-
-            // Read if TTS is enabled, the message is less than threshold, is a text message, and not deafened
-            if(mSettings.isTextToSpeechEnabled() &&
-                    mTTS != null &&
-                    formattedTtsMessage.length() <= TTS_THRESHOLD &&
-                    getSessionUser() != null &&
-                    !getSessionUser().isSelfDeafened()) {
-                int result = mTTS.speak(formattedTtsMessage, TextToSpeech.QUEUE_ADD, null);
-                if (result == TextToSpeech.ERROR) {
-                    Log.w(TAG, "TTS engine rejected a queued message");
-                }
+            String formattedTtsMessage = getString(R.string.notification_message, new Object[]{message.getActorName(), ttsMessage});
+            if (mSettings.isTextToSpeechEnabled() && mTTS != null && formattedTtsMessage.length() <= 250 && getSessionUser() != null && !getSessionUser().isSelfDeafened()) {
+                mTTS.speak(formattedTtsMessage, 1, null);
             }
-
-            // TODO: create a customizable notification sieve
-            if (RadioNotificationPolicy.shouldShowChatNotification(
-                    mSettings.isChatNotifyEnabled(), isManagedRadioDevice())) {
+            if (mSettings.isChatNotifyEnabled()) {
                 mMessageNotification.show(message);
             }
-
-            appendMessageLog(new IChatMessage.TextMessage(message));
+            mMessageLog.add(new IChatMessage.TextMessage(message));
         }
 
-        @Override
         public void onLogInfo(String message) {
-            appendMessageLog(new IChatMessage.InfoMessage(IChatMessage.InfoMessage.Type.INFO,
-                    message));
+            mMessageLog.add(new IChatMessage.InfoMessage(IChatMessage.InfoMessage.Type.INFO, message));
         }
 
-        @Override
         public void onLogWarning(String message) {
-            appendMessageLog(new IChatMessage.InfoMessage(IChatMessage.InfoMessage.Type.WARNING,
-                    message));
+            mMessageLog.add(new IChatMessage.InfoMessage(IChatMessage.InfoMessage.Type.WARNING, message));
         }
 
-        @Override
         public void onLogError(String message) {
-            appendMessageLog(new IChatMessage.InfoMessage(IChatMessage.InfoMessage.Type.ERROR,
-                    message));
+            mMessageLog.add(new IChatMessage.InfoMessage(IChatMessage.InfoMessage.Type.ERROR, message));
         }
 
-        @Override
         public void onPermissionDenied(String reason) {
-            if(mNotification != null && !mSuppressNotifications) {
+            if (mNotification != null && !mSuppressNotifications) {
                 mNotification.show();
             }
         }
 
-        @Override
         public void onUserTalkStateUpdated(IUser user) {
             int selfSession = -1;
             try {
@@ -426,398 +217,350 @@ public class MumlaService extends HumlaService implements
             } catch (IllegalStateException e) {
                 Log.d(TAG, "exception in onUserTalkStateUpdated: " + e);
             }
-
-            boolean wasReceiving = mRadioReceiveTracker.isReceiving();
-            mRadioReceiveTracker.update(user.getSession(), user.getName(),
-                    user.getSession() == selfSession, user.getTalkState());
-            if ((!wasReceiving && mRadioReceiveTracker.isReceiving())
-                    || (user.getSession() == selfSession
-                    && user.getTalkState() != TalkState.PASSIVE)) {
-                wakeRadioDisplay();
+            if (isConnectionEstablished() && user.getSession() == selfSession) {
+                if (getTransmitMode() == 1) {
+                    boolean isTalkingNow = user.getTalkState() == TalkState.TALKING;
+                    if (isTalkingNow && mPTTSoundEnabled) {
+                        AudioManager audioManager = (AudioManager) getSystemService("audio");
+                        audioManager.playSoundEffect(5, -1.0f);
+                    }
+                    if (!isTalkingNow && mSelfWasTalkingPtt) {
+                        playRogerBeep();
+                    }
+                    mSelfWasTalkingPtt = isTalkingNow;
+                }
             }
-
-            if (isConnectionEstablished() &&
-                    user.getSession() == selfSession &&
-                    getTransmitMode() == Constants.TRANSMIT_PUSH_TO_TALK &&
-                    user.getTalkState() == TalkState.TALKING &&
-                    mPTTSoundEnabled) {
-                AudioManager audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
-                audioManager.playSoundEffect(AudioManager.FX_KEYPRESS_STANDARD, -1);
-            }
-        }
-
-        @Override
-        public void onUserRemoved(IUser user, String reason) {
-            mRadioReceiveTracker.remove(user.getSession());
         }
     };
 
-    @Override
+    private void loadRogerBeepSound() {
+        this.mRogerBeepSoundId = 0;
+        if (this.mRogerBeepTone == null || "off".equals(this.mRogerBeepTone) || this.mSoundPool == null) {
+            return;
+        }
+        int resId = getResources().getIdentifier("roger_beep_" + this.mRogerBeepTone, "raw", getPackageName());
+        if (resId != 0) {
+            this.mRogerBeepSoundId = this.mSoundPool.load(this, resId, 1);
+        } else {
+            Log.w(TAG, "roger beep tone '" + this.mRogerBeepTone + "' has no matching res/raw file");
+        }
+    }
+
+    private void playRogerBeep() {
+        if (this.mSoundPool != null && this.mRogerBeepSoundId != 0) {
+            this.mSoundPool.play(this.mRogerBeepSoundId, 1.0f, 1.0f, 1, 0, 1.0f);
+        }
+    }
+
+    private short[] loadRogerBeepPcm(String tone) {
+        int resId;
+        if (tone == null || "off".equals(tone) || (resId = getResources().getIdentifier("roger_beep_" + tone, "raw", getPackageName())) == 0) {
+            return null;
+        }
+        try {
+            InputStream is = getResources().openRawResource(resId);
+            byte[] wavBytes = readAllBytes(is);
+            short[] pcm = parseWavPcm16Mono(wavBytes);
+            if (pcm == null) {
+                Log.w(TAG, "roger beep tone '" + tone + "': couldn't parse .wav data chunk");
+            }
+            if (is != null) is.close();
+            return pcm;
+        } catch (IOException e) {
+            Log.w(TAG, "roger beep tone '" + tone + "': failed to read .wav resource", e);
+            return null;
+        }
+    }
+
+    private static byte[] readAllBytes(InputStream is) throws IOException {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        byte[] data = new byte[4096];
+        while (true) {
+            int n = is.read(data);
+            if (n != -1) buffer.write(data, 0, n);
+            else return buffer.toByteArray();
+        }
+    }
+
+    private static short[] parseWavPcm16Mono(byte[] wav) {
+        if (wav.length >= 12 && wav[0] == 82 && wav[1] == 73 && wav[2] == 70 && wav[3] == 70) {
+            int offset = 12;
+            while (offset + 8 <= wav.length) {
+                String chunkId = new String(wav, offset, 4, StandardCharsets.US_ASCII);
+                int chunkSize = (wav[offset + 4] & 255) | ((wav[offset + 5] & 255) << 8) | ((wav[offset + 6] & 255) << 16) | ((wav[offset + 7] & 255) << 24);
+                int dataStart = offset + 8;
+                if ("data".equals(chunkId)) {
+                    if (dataStart + chunkSize > wav.length) chunkSize = wav.length - dataStart;
+                    int sampleCount = chunkSize / 2;
+                    short[] samples = new short[sampleCount];
+                    for (int i = 0; i < sampleCount; i++) {
+                        int lo = wav[(i * 2) + dataStart] & 255;
+                        int hi = wav[(i * 2) + dataStart + 1];
+                        samples[i] = (short) ((hi << 8) | lo);
+                    }
+                    return samples;
+                }
+                offset = dataStart + chunkSize + (chunkSize % 2);
+            }
+            return null;
+        }
+        return null;
+    }
+
+    private void reportLocationComment() {
+        LocationCommentReporter.fetchLocationComment(this, new LocationCommentReporter.Callback() {
+            @Override
+            public void onCommentReady(String comment) {
+                try {
+                    if (!isConnected()) return;
+                    IHumlaSession session = HumlaSession();
+                    session.setUserComment(session.getSessionId(), comment);
+                } catch (IllegalStateException | HumlaDisconnectedException e) {
+                    Log.w(TAG, "failed to set location comment", e);
+                }
+            }
+            @Override
+            public void onFailed(String reason) {
+                Log.d(TAG, "location comment not sent: " + reason);
+            }
+        });
+    }
+
+    private void reportCachedAvatar() {
+        byte[] cached = AvatarUtils.loadCachedAvatar(this);
+        if (cached == null || cached.length == 0) return;
+        try {
+            if (!isConnected()) return;
+            IHumlaSession session = HumlaSession();
+            session.setUserTexture(session.getSessionId(), cached);
+        } catch (HumlaDisconnectedException | IllegalStateException e) {
+            Log.w(TAG, "failed to resend cached avatar", e);
+        }
+    }
+
     public void onCreate() {
         super.onCreate();
-        sRunningService = this;
-        registerObserver(mObserver);
-
-        // Register for preference changes
-        mSettings = Settings.getInstance(this);
-        mPTTSoundEnabled = RadioPttKeyManager.shouldEnablePttConfirmationSound(
-                RadioDeviceProfile.detectCurrent(), mSettings.isPttSoundEnabled());
-        mShortTtsMessagesEnabled = mSettings.isShortTextToSpeechMessagesEnabled();
+        registerObserver(this.mObserver);
+        this.mSettings = Settings.getInstance(this);
+        this.mPTTSoundEnabled = this.mSettings.isPttSoundEnabled();
+        this.mShortTtsMessagesEnabled = this.mSettings.isShortTextToSpeechMessagesEnabled();
         SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(this);
         preferences.registerOnSharedPreferenceChangeListener(this);
-
-        // Manually set theme to style overlay views
-        // XML <application> theme does NOT do this!
+        this.mSoundPool = new SoundPool.Builder().setMaxStreams(1).setAudioAttributes(new AudioAttributes.Builder().setUsage(13).setContentType(4).build()).build();
+        this.mRogerBeepTone = this.mSettings.getRogerBeepTone();
+        loadRogerBeepSound();
+        setRogerBeepSamples(loadRogerBeepPcm(this.mRogerBeepTone));
         setTheme(R.style.Theme_Mumla);
-
-        mMessageLog = new ArrayList<>(MAX_MESSAGE_LOG_ENTRIES);
-        mMessageNotification = new MumlaMessageNotification(MumlaService.this);
-
-        initializePttMediaSession();
-        updatePttMediaSessionState();
-        if (isManagedRadioDevice()) {
-            mMessageNotification.dismiss();
-            RadioProcessWatchdog.arm(this);
-            mPttWatchdogHandler.postDelayed(mRadioProcessWatchdogHeartbeat,
-                    RadioProcessWatchdog.HEARTBEAT_INTERVAL_MS);
+        this.mMessageLog = new ArrayList();
+        this.mMessageNotification = new MumlaMessageNotification(this);
+        this.mChannelOverlay = new MumlaOverlay(this);
+        this.mHotCorner = new MumlaHotCorner(this, this.mSettings.getHotCornerGravity(), this.mHotCornerListener);
+        if (this.mSettings.isTextToSpeechEnabled()) {
+            this.mTTS = new TextToSpeech(this, this.mTTSInitListener);
         }
-        if (RadioDeviceProfile.T56.equals(RadioDeviceProfile.detectCurrent())) {
-            mAprsTrackingManager = new AprsTrackingManager(this);
-            reloadTrackingConfig();
-        }
-
-        // Instantiate overlay view
-        mChannelOverlay = new MumlaOverlay(this);
-        mHotCorner = new MumlaHotCorner(this, mSettings.getHotCornerGravity(), mHotCornerListener);
-
-        // Set up TTS
-        if(mSettings.isTextToSpeechEnabled())
-            mTTS = new TextToSpeech(this, mTTSInitListener);
-
-        mTalkReceiver = new TalkBroadcastReceiver(this);
-        registerRadioHardwarePttReceiver();
+        this.mTalkReceiver = new TalkBroadcastReceiver(this);
     }
 
-    @Override
     public IBinder onBind(Intent intent) {
-        return new MumlaBinder(this);
+        return new MumlaBinder();
     }
 
-    @Override
-    public int onStartCommand(Intent intent, int flags, int startId) {
-        if (intent != null) {
-            if (ACTION_RADIO_REQUIRE_PTT_RELEASE.equals(intent.getAction())) {
-                requirePttRelease();
-            } else if (ACTION_RADIO_PTT_RELEASED.equals(intent.getAction())) {
-                onTalkKeyUp();
-            } else if (ACTION_RADIO_PTT_DOWN.equals(intent.getAction())) {
-                wakeRadioDisplay(false);
-                onTalkKeyDown();
-            } else if (ACTION_RADIO_PTT_UP.equals(intent.getAction())) {
-                onTalkKeyUp();
-            } else if (ACTION_RADIO_TRACKING_POLL.equals(intent.getAction())
-                    && mAprsTrackingManager != null) {
-                mAprsTrackingManager.onPoll();
-            }
-        }
-        return super.onStartCommand(intent, flags, startId);
-    }
-
-    @Override
     public void onDestroy() {
-        mDestroying = true;
-        try {
-            destroyMumlaResources();
-        } finally {
-            try {
-                setProximitySensorOn(false);
-            } finally {
-                super.onDestroy();
-            }
+        if (this.mNotification != null) {
+            this.mNotification.hide();
+            this.mNotification = null;
         }
+        if (this.mReconnectNotification != null) {
+            this.mReconnectNotification.hide();
+            this.mReconnectNotification = null;
+        }
+        SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(this);
+        preferences.unregisterOnSharedPreferenceChangeListener(this);
+        try { unregisterReceiver(this.mTalkReceiver); } catch (IllegalArgumentException e) { e.printStackTrace(); }
+        unregisterObserver(this.mObserver);
+        if (this.mTTS != null) this.mTTS.shutdown();
+        if (this.mSoundPool != null) {
+            this.mSoundPool.release();
+            this.mSoundPool = null;
+        }
+        this.mMessageLog = null;
+        this.mMessageNotification.dismiss();
+        super.onDestroy();
     }
 
-    private void destroyMumlaResources() {
-        if (sRunningService == this) {
-            sRunningService = null;
-        }
-        AprsTrackingManager trackingManager = mAprsTrackingManager;
-        mAprsTrackingManager = null;
-        MediaSession pttMediaSession = mPttMediaSession;
-        ToneGenerator radioAlertTone = mRadioAlertTone;
-        PowerManager.WakeLock radioScreenWakeLock = mRadioScreenWakeLock;
-        MumlaConnectionNotification notification = mNotification;
-        MumlaReconnectNotification reconnectNotification = mReconnectNotification;
-        RadioHardwareKeyReceiver hardwareKeyReceiver = mRadioHardwareKeyReceiver;
-        TextToSpeech textToSpeech = mTTS;
-        MumlaMessageNotification messageNotification = mMessageNotification;
-        mPttMediaSession = null;
-        mRadioAlertTone = null;
-        mRadioScreenWakeLock = null;
-        mNotification = null;
-        mReconnectNotification = null;
-        mRadioHardwareKeyReceiver = null;
-        mTTS = null;
-        mMessageNotification = null;
-        mPttMediaKeyDown = false;
-        mMessageLog = null;
-
-        RuntimeException failure = CleanupRunner.runAll(
-                () -> {
-                    if (trackingManager != null) {
-                        trackingManager.stop();
-                    }
-                },
-                () -> mPttWatchdogHandler.removeCallbacks(mRadioProcessWatchdogHeartbeat),
-                mRadioReceiveTracker::clear,
-                () -> releasePttForSafety(true),
-                () -> {
-                    if (pttMediaSession != null) {
-                        pttMediaSession.setActive(false);
-                    }
-                },
-                () -> {
-                    if (pttMediaSession != null) {
-                        pttMediaSession.release();
-                    }
-                },
-                () -> {
-                    if (radioAlertTone != null) {
-                        radioAlertTone.release();
-                    }
-                },
-                () -> {
-                    if (radioScreenWakeLock != null && radioScreenWakeLock.isHeld()) {
-                        radioScreenWakeLock.release();
-                    }
-                },
-                () -> {
-                    if (notification != null) {
-                        notification.hide();
-                    }
-                },
-                () -> {
-                    if (reconnectNotification != null) {
-                        reconnectNotification.hide();
-                    }
-                },
-                () -> PreferenceManager.getDefaultSharedPreferences(this)
-                        .unregisterOnSharedPreferenceChangeListener(this),
-                () -> unregisterReceiverIfRegistered(mTalkReceiver),
-                () -> unregisterReceiverIfRegistered(hardwareKeyReceiver),
-                () -> unregisterObserver(mObserver),
-                () -> {
-                    if (textToSpeech != null) {
-                        textToSpeech.shutdown();
-                    }
-                },
-                () -> {
-                    if (messageNotification != null) {
-                        messageNotification.dismiss();
-                    }
-                });
-        if (failure != null) {
-            Log.e(TAG, "Mumla teardown completed with a resource failure", failure);
-        }
-    }
-
-    private void unregisterReceiverIfRegistered(BroadcastReceiver receiver) {
-        if (receiver == null) {
-            return;
-        }
-        try {
-            unregisterReceiver(receiver);
-        } catch (IllegalArgumentException ignored) {
-            // A partial service startup may not have completed receiver registration.
-        }
-    }
-
-    @Override
+    // --- MODIFIKASI UTAMA: FORCE WAKE UP AUDIO DI SINI ---
     public void onConnectionSynchronized() {
-        if (mDestroying) {
-            return;
-        }
-        // TODO? We seem to be getting a RuntimeException here, from the call
-        //  to the superclass function (in HumlaService). In there,
-        //  mConnect.getSession() finds that isSynchronized==false and throws
-        //  NotSynchronizedException (which is re-thrown as the
-        //  RuntimeException). But how can it be !isSynchronized? -- A server
-        //  msg triggers HumlaConnection.messageServerSync(), which sets up
-        //  mSession and mSynchronized==true and then proceeds to call us from
-        //  a Runnable post()ed to a Handler. The reason could only be that
-        //  HumlaConnect.connect() or disconnect() is called again in the
-        //  middle of all this? And it's made possible by the Handler?
         try {
             super.onConnectionSynchronized();
+            
+            if (this.mSettings.isMuted() || this.mSettings.isDeafened()) {
+                setSelfMuteDeafState(this.mSettings.isMuted(), this.mSettings.isDeafened());
+            }
+            if (Build.VERSION.SDK_INT >= 34) {
+                registerReceiver(this.mTalkReceiver, new IntentFilter("se.lublin.mumla.action.TALK"), 2);
+            } else {
+                registerReceiver(this.mTalkReceiver, new IntentFilter("se.lublin.mumla.action.TALK"));
+            }
+            if (this.mSettings.isHotCornerEnabled()) {
+                this.mHotCorner.setShown(true);
+            }
+            if (this.mSettings.isHandsetMode()) {
+                setProximitySensorOn(true);
+            }
+
+            // PAKSA INISIALISASI AUDIO STREAM AGAR LANGSUNG NYALA
+            Bundle audioExtras = new Bundle();
+            // Set stream type sesuai mode handset (0=Voice Call, 3=Music)
+            audioExtras.putInt("audio_stream", 
+                this.mSettings.isHandsetMode() ? STREAM_VOICE_CALL : STREAM_MUSIC);
+            
+            // Kirim parameter audio dasar untuk memicu alloc buffer di底层 engine
+            audioExtras.putInt("frames_per_packet", this.mSettings.getFramesPerPacket());
+            audioExtras.putInt("input_quality", this.mSettings.getInputQuality());
+            
+            try {
+                configureExtras(audioExtras);
+                Log.d(TAG, "Audio stream force-initialized on sync");
+            } catch (AudioException e) {
+                Log.e(TAG, "Failed to init audio stream", e);
+            }
+            
         } catch (RuntimeException e) {
             Log.d(TAG, "exception in onConnectionSynchronized: " + e);
-            return;
         }
-
-        // Restore mute/deafen state
-        if(mSettings.isMuted() || mSettings.isDeafened()) {
-            setSelfMuteDeafState(mSettings.isMuted(), mSettings.isDeafened());
-        }
-
-        // Intentional legacy external TALK control on controlled dedicated deployments.
-        ContextCompat.registerReceiver(this, mTalkReceiver,
-                new IntentFilter(TalkBroadcastReceiver.BROADCAST_TALK),
-                ContextCompat.RECEIVER_EXPORTED);
-
-        if (mSettings.isHotCornerEnabled()) {
-            mHotCorner.setShown(true);
-        }
-        // Configure proximity sensor
-        if (mSettings.isHandsetMode()) {
-            setProximitySensorOn(true);
-        }
-
-        updatePttMediaSessionState();
     }
+    // -----------------------------------------------------
 
-    @Override
     public void onConnectionDisconnected(HumlaException e) {
-        mRadioReceiveTracker.clear();
-        mRadioRoomReady = false;
-        releasePttForSafety(true);
         super.onConnectionDisconnected(e);
-        // Humla disconnects its connection from super.onDestroy(). Dynamic dispatch can therefore
-        // arrive here after destroyMumlaResources() has already cleared app-owned notification and
-        // UI fields. The Humla half still receives the disconnect above; skip only the cleared
-        // Mumla resources so teardown remains idempotent and cannot throw a late NPE.
-        if (mDestroying) {
-            return;
-        }
-        updatePttMediaSessionState();
-        try {
-            unregisterReceiver(mTalkReceiver);
-        } catch (IllegalArgumentException iae) {
-        }
-
-        // Remove overlay if present.
-        mChannelOverlay.hide();
-
-        mHotCorner.setShown(false);
-
+        try { unregisterReceiver(this.mTalkReceiver); } catch (IllegalArgumentException e2) {}
+        this.mChannelOverlay.hide();
+        this.mHotCorner.setShown(false);
         setProximitySensorOn(false);
-
         clearMessageLog();
-        mMessageNotification.dismiss();
+        this.mMessageNotification.dismiss();
     }
 
-    /**
-     * Called when the user makes a change to their preferences.
-     * Should update all preferences relevant to the service.
-     */
     @Override
     public void onSharedPreferenceChanged(SharedPreferences sharedPreferences, String key) {
+        char c;
         Bundle changedExtras = new Bundle();
         boolean requiresReconnect = false;
-        switch (key) {
-            case Settings.PREF_INPUT_METHOD:
-                /* Convert input method defined in settings to an integer format used by Humla. */
-                int inputMethod = mSettings.getHumlaInputMethod();
-                changedExtras.putInt(HumlaService.EXTRAS_TRANSMIT_MODE, inputMethod);
-                mChannelOverlay.setPushToTalkShown(inputMethod == Constants.TRANSMIT_PUSH_TO_TALK);
-                updatePttMediaSessionState();
+        switch (key.hashCode()) {
+            case -2067778698: if (key.equals("roger_beep")) c = 11; else c = 65535; break;
+            case -2029305277: if (key.equals("shortTtsMessages")) c = 5; else c = 65535; break;
+            case -1863259392: if (key.equals("ptt_sound")) c = '\n'; else c = 65535; break;
+            case -1591013384: if (key.equals("input_bitrate")) c = '\f'; else c = 65535; break;
+            case -1217870590: if (key.equals("hotCorner")) c = 3; else c = 65535; break;
+            case -1049000753: if (key.equals("handset_mode")) c = 1; else c = 65535; break;
+            case -837528182: if (key.equals("input_quality")) c = '\r'; else c = 65535; break;
+            case -836058544: if (key.equals("useTor")) c = 17; else c = 65535; break;
+            case -836058388: if (key.equals("useTts")) c = 4; else c = 65535; break;
+            case -644529902: if (key.equals("certificateId")) c = 15; else c = 65535; break;
+            case -224875644: if (key.equals("inputVolume")) c = 6; else c = 65535; break;
+            case 378885201: if (key.equals("preprocessor_enabled")) c = '\b'; else c = 65535; break;
+            case 464933110: if (key.equals("forceTcp")) c = 16; else c = 65535; break;
+            case 873529237: if (key.equals("audioInputMethod")) c = 0; else c = 65535; break;
+            case 911058419: if (key.equals("audio_per_packet")) c = 14; else c = 65535; break;
+            case 1343034700: if (key.equals("half_duplex")) c = 7; else c = 65535; break;
+            case 1353190215: if (key.equals("disableOpus")) c = 18; else c = 65535; break;
+            case 1445797507: if (key.equals("echo_cancellation_method")) c = '\t'; else c = 65535; break;
+            case 2123245906: if (key.equals("vadThreshold")) c = 2; else c = 65535; break;
+            default: c = 65535; break;
+        }
+        switch (c) {
+            case 0:
+                int inputMethod = this.mSettings.getHumlaInputMethod();
+                changedExtras.putInt("transmit_mode", inputMethod);
+                this.mChannelOverlay.setPushToTalkShown(inputMethod == 1);
                 break;
-            case Settings.PREF_HANDSET_MODE:
-                setProximitySensorOn(isConnectionEstablished() && mSettings.isHandsetMode());
-                changedExtras.putInt(HumlaService.EXTRAS_AUDIO_STREAM, mSettings.isHandsetMode() ?
-                                     AudioManager.STREAM_VOICE_CALL : AudioManager.STREAM_MUSIC);
+            case 1:
+                setProximitySensorOn(isConnectionEstablished() && this.mSettings.isHandsetMode());
+                changedExtras.putInt("audio_stream", this.mSettings.isHandsetMode() ? STREAM_VOICE_CALL : STREAM_MUSIC);
                 break;
-            case Settings.PREF_THRESHOLD:
-                changedExtras.putFloat(HumlaService.EXTRAS_DETECTION_THRESHOLD,
-                        mSettings.getDetectionThreshold());
+            case 2:
+                changedExtras.putFloat("detection_threshold", this.mSettings.getDetectionThreshold());
                 break;
-            case Settings.PREF_HOT_CORNER_KEY:
-                mHotCorner.setGravity(mSettings.getHotCornerGravity());
-                mHotCorner.setShown(isConnectionEstablished() && mSettings.isHotCornerEnabled());
+            case 3:
+                this.mHotCorner.setGravity(this.mSettings.getHotCornerGravity());
+                MumlaHotCorner mumlaHotCorner = this.mHotCorner;
+                boolean r7 = isConnectionEstablished() && this.mSettings.isHotCornerEnabled();
+                mumlaHotCorner.setShown(r7);
                 break;
-            case Settings.PREF_USE_TTS:
-                if (mTTS == null && mSettings.isTextToSpeechEnabled())
-                    mTTS = new TextToSpeech(this, mTTSInitListener);
-                else if (mTTS != null && !mSettings.isTextToSpeechEnabled()) {
-                    mTTS.shutdown();
-                    mTTS = null;
+            case 4:
+                if (this.mTTS == null && this.mSettings.isTextToSpeechEnabled()) {
+                    this.mTTS = new TextToSpeech(this, this.mTTSInitListener);
+                } else if (this.mTTS != null && !this.mSettings.isTextToSpeechEnabled()) {
+                    this.mTTS.shutdown();
+                    this.mTTS = null;
                 }
                 break;
-            case Settings.PREF_SHORT_TTS_MESSAGES:
-                mShortTtsMessagesEnabled = mSettings.isShortTextToSpeechMessagesEnabled();
+            case 5:
+                this.mShortTtsMessagesEnabled = this.mSettings.isShortTextToSpeechMessagesEnabled();
                 break;
-            case Settings.PREF_AMPLITUDE_BOOST:
-                changedExtras.putFloat(EXTRAS_AMPLITUDE_BOOST,
-                        mSettings.getAmplitudeBoostMultiplier());
+            case 6:
+                changedExtras.putFloat("amplitude_boost", this.mSettings.getAmplitudeBoostMultiplier());
                 break;
-            case Settings.PREF_HALF_DUPLEX:
-                changedExtras.putBoolean(EXTRAS_HALF_DUPLEX, mSettings.isHalfDuplex());
+            case 7:
+                changedExtras.putBoolean("half_duplex", this.mSettings.isHalfDuplex());
                 break;
-            case Settings.PREF_PREPROCESSOR_ENABLED:
-                changedExtras.putBoolean(EXTRAS_ENABLE_PREPROCESSOR,
-                        mSettings.isPreprocessorEnabled());
+            case '\b':
+                changedExtras.putBoolean("enable_preprocessor", this.mSettings.isPreprocessorEnabled());
                 break;
-            case Settings.PREF_ECHO_CANCELLATION_METHOD:
-                changedExtras.putString(EXTRAS_ECHO_CANCELLATION_METHOD,
-                        mSettings.getEchoCancellationMethod());
+            case '\t':
+                changedExtras.putString("echo_cancellation_method", this.mSettings.getEchoCancellationMethod());
                 break;
-            case Settings.PREF_PTT_SOUND:
-                mPTTSoundEnabled = RadioPttKeyManager.shouldEnablePttConfirmationSound(
-                        RadioDeviceProfile.detectCurrent(), mSettings.isPttSoundEnabled());
+            case '\n':
+                this.mPTTSoundEnabled = this.mSettings.isPttSoundEnabled();
                 break;
-            case Settings.PREF_INPUT_QUALITY:
-                changedExtras.putInt(EXTRAS_INPUT_QUALITY, mSettings.getInputQuality());
+            case 11:
+                this.mRogerBeepTone = this.mSettings.getRogerBeepTone();
+                loadRogerBeepSound();
+                setRogerBeepSamples(loadRogerBeepPcm(this.mRogerBeepTone));
                 break;
-            case Settings.PREF_INPUT_RATE:
-                changedExtras.putInt(EXTRAS_INPUT_RATE, mSettings.getInputSampleRate());
+            case '\f':
+                changedExtras.putInt("input_quality", this.mSettings.getInputQuality());
                 break;
-            case Settings.PREF_FRAMES_PER_PACKET:
-                changedExtras.putInt(EXTRAS_FRAMES_PER_PACKET, mSettings.getFramesPerPacket());
+            case '\r':
+                changedExtras.putInt("input_frequency", this.mSettings.getInputSampleRate());
                 break;
-            case Settings.PREF_CERT_ID:
-            case Settings.PREF_FORCE_TCP:
-            case Settings.PREF_USE_TOR:
-            case Settings.PREF_DISABLE_OPUS:
-                // These are settings we flag as 'requiring reconnect'.
+            case 14:
+                changedExtras.putInt("frames_per_packet", this.mSettings.getFramesPerPacket());
+                break;
+            case 15: case 16: case 17: case 18:
                 requiresReconnect = true;
                 break;
         }
         if (changedExtras.size() > 0) {
             try {
-                // Reconfigure the service appropriately.
                 requiresReconnect |= configureExtras(changedExtras);
-            } catch (AudioException e) {
-                e.printStackTrace();
-            }
+            } catch (AudioException e) { e.printStackTrace(); }
         }
-
         if (requiresReconnect && isConnectionEstablished()) {
-            Toast.makeText(this, R.string.change_requires_reconnect, Toast.LENGTH_LONG).show();
+            Toast.makeText((Context) this, R.string.change_requires_reconnect, 1).show();
         }
     }
 
-    @SuppressLint("WakelockTimeout")
     private void setProximitySensorOn(boolean on) {
-        if(on) {
-            if (mProximityLock != null && mProximityLock.isHeld()) {
-                return;
-            }
-            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
-            mProximityLock = pm.newWakeLock(PROXIMITY_SCREEN_OFF_WAKE_LOCK, "Mumla:Proximity");
-            // This lifecycle-owned lock must remain held while handset audio is connected.
-            mProximityLock.setReferenceCounted(false);
-            mProximityLock.acquire();
-        } else {
-            if(mProximityLock != null && mProximityLock.isHeld()) mProximityLock.release();
-            mProximityLock = null;
+        if (on) {
+            PowerManager pm = (PowerManager) getSystemService("power");
+            this.mProximityLock = pm.newWakeLock(32, "Mumla:Proximity");
+            this.mProximityLock.acquire();
+            return;
         }
+        if (this.mProximityLock != null) {
+            this.mProximityLock.release();
+        }
+        this.mProximityLock = null;
     }
 
     @Override
     public void onMuteToggled() {
         IUser user = getSessionUser();
         if (isConnectionEstablished() && user != null) {
+            boolean deafened = true;
             boolean muted = !user.isSelfMuted();
-            boolean deafened = user.isSelfDeafened() && muted;
+            deafened = (user.isSelfDeafened() && muted) ? false : false;
             setSelfMuteDeafState(muted, deafened);
         }
     }
@@ -832,514 +575,104 @@ public class MumlaService extends HumlaService implements
 
     @Override
     public void onOverlayToggled() {
-        if (!mChannelOverlay.isShown()) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                if (!android.provider.Settings.canDrawOverlays(getApplicationContext())) {
-                    Intent showSetting = new Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                            Uri.parse("package:" + getPackageName()));
-                    showSetting.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    startActivity(showSetting);
-                    Toast.makeText(this, R.string.grant_perm_draw_over_apps, Toast.LENGTH_LONG).show();
-                    return;
-                }
-            }
-            mChannelOverlay.show();
-        } else {
-            mChannelOverlay.hide();
+        if (Build.VERSION.SDK_INT < 31) {
+            Intent close = new Intent("android.intent.action.CLOSE_SYSTEM_DIALOGS");
+            getApplicationContext().sendBroadcast(close);
         }
+        if (!this.mChannelOverlay.isShown()) {
+            if (Build.VERSION.SDK_INT >= 23 && !android.provider.Settings.canDrawOverlays(getApplicationContext())) {
+                Intent showSetting = new Intent("android.settings.action.MANAGE_OVERLAY_PERMISSION", Uri.parse("package:" + getPackageName()));
+                showSetting.setFlags(268435456);
+                startActivity(showSetting);
+                Toast.makeText((Context) this, R.string.grant_perm_draw_over_apps, 1).show();
+                return;
+            }
+            this.mChannelOverlay.show();
+            return;
+        }
+        this.mChannelOverlay.hide();
     }
 
     @Override
     public void onReconnectNotificationDismissed() {
-        mErrorShown = true;
+        this.mErrorShown = true;
     }
 
     @Override
-    public void reconnect() {
-        connect();
-    }
+    public void reconnect() { connect(); }
 
     @Override
     public void cancelReconnect() {
-        if (mReconnectNotification != null) {
-            mReconnectNotification.hide();
-            mReconnectNotification = null;
+        if (this.mReconnectNotification != null) {
+            this.mReconnectNotification.hide();
+            this.mReconnectNotification = null;
         }
         super.cancelReconnect();
     }
 
     @Override
     public void setOverlayShown(boolean showOverlay) {
-        if(!mChannelOverlay.isShown()) {
-            mChannelOverlay.show();
-        } else {
-            mChannelOverlay.hide();
-        }
+        if (!this.mChannelOverlay.isShown()) this.mChannelOverlay.show();
+        else this.mChannelOverlay.hide();
     }
 
     @Override
-    public boolean isOverlayShown() {
-        return mChannelOverlay.isShown();
-    }
+    public boolean isOverlayShown() { return this.mChannelOverlay.isShown(); }
 
     @Override
-    public void clearChatNotifications() {
-        mMessageNotification.dismiss();
-    }
+    public void clearChatNotifications() { this.mMessageNotification.dismiss(); }
 
     @Override
     public void markErrorShown() {
-        mErrorShown = true;
-        // Dismiss the reconnection prompt if a reconnection isn't in progress.
-        if (mReconnectNotification != null && !isReconnecting()) {
-            mReconnectNotification.hide();
-            mReconnectNotification = null;
+        this.mErrorShown = true;
+        if (this.mReconnectNotification != null && !isReconnecting()) {
+            this.mReconnectNotification.hide();
+            this.mReconnectNotification = null;
         }
     }
 
     @Override
-    public boolean isErrorShown() {
-        return mErrorShown;
-    }
+    public boolean isErrorShown() { return this.mErrorShown; }
 
-    /**
-     * Creates the media-session bridge used for media-style hardware PTT keys.
-     *
-     * This deliberately does not claim arbitrary F1/F2 keys. Android only routes media-button
-     * keys through MediaSession for an ordinary application; T99's GPIO/F-key path needs a
-     * device-specific broadcast or privileged input integration discovered separately.
-     */
-    private boolean isManagedRadioDevice() {
-        return RadioPttKeyManager.isRadioProfile(RadioDeviceProfile.detectCurrent());
-    }
-
-    @SuppressWarnings("deprecation")
-    private void wakeRadioDisplay() {
-        wakeRadioDisplay(false);
-    }
-
-    private void wakeRadioDisplay(boolean connectOnPtt) {
-        if (!isManagedRadioDevice()) {
-            return;
-        }
-        if (connectOnPtt) {
-            RadioPttRecoveryGuard.requireRelease();
-        }
-        long now = SystemClock.elapsedRealtime();
-        if (now - mLastRadioWakeElapsedRealtime < RADIO_WAKE_COOLDOWN_MS) {
-            return;
-        }
-        mLastRadioWakeElapsedRealtime = now;
-
-        PowerManager manager = (PowerManager) getSystemService(POWER_SERVICE);
-        if (manager != null) {
-            if (mRadioScreenWakeLock == null) {
-                mRadioScreenWakeLock = manager.newWakeLock(
-                        PowerManager.SCREEN_BRIGHT_WAKE_LOCK
-                                | PowerManager.ACQUIRE_CAUSES_WAKEUP
-                                | PowerManager.ON_AFTER_RELEASE,
-                        "Mumla:RadioDisplay");
-            }
-            if (!mRadioScreenWakeLock.isHeld()) {
-                mRadioScreenWakeLock.acquire(RADIO_WAKE_DURATION_MS);
-            }
-        }
-
-        Intent radio = new Intent(this, RadioShellActivity.class)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
-                        | Intent.FLAG_ACTIVITY_SINGLE_TOP
-                        | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        if (connectOnPtt) {
-            radio.putExtra(RadioShellActivity.EXTRA_CONNECT_ON_PTT, true);
-        }
-        try {
-            startActivity(radio);
-        } catch (RuntimeException error) {
-            Log.w(TAG, "Unable to bring radio status to foreground", error);
-        }
-    }
-
-    private void playPttFailureAlert() {
-        try {
-            if (mRadioAlertTone == null) {
-                mRadioAlertTone = new ToneGenerator(AudioManager.STREAM_MUSIC, 90);
-            }
-            mRadioAlertTone.startTone(ToneGenerator.TONE_SUP_ERROR, 700);
-        } catch (RuntimeException error) {
-            Log.w(TAG, "Unable to play PTT failure tone", error);
-        }
-        sendBroadcast(new Intent(ACTION_RADIO_PTT_FAILURE).setPackage(getPackageName()));
-    }
-
-    private void initializePttMediaSession() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
-            return;
-        }
-
-        mPttMediaSession = new MediaSession(this, TAG + ".PttMediaSession");
-        mPttMediaSession.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS);
-        mPttMediaSession.setCallback(new MediaSession.Callback() {
-            @Override
-            public boolean onMediaButtonEvent(Intent mediaButtonIntent) {
-                KeyEvent keyEvent = mediaButtonIntent.getParcelableExtra(Intent.EXTRA_KEY_EVENT);
-                RadioKeyDiagnostics.record(MumlaService.this, "media-session", keyEvent);
-                if (keyEvent == null || !isConfiguredMediaPttKey(keyEvent.getKeyCode())) {
-                    return super.onMediaButtonEvent(mediaButtonIntent);
-                }
-
-                if (keyEvent.getAction() == KeyEvent.ACTION_DOWN) {
-                    if (!mPttMediaKeyDown && keyEvent.getRepeatCount() == 0) {
-                        mPttMediaKeyDown = true;
-                        onTalkKeyDown();
-                    }
-                    return true;
-                }
-
-                if (keyEvent.getAction() == KeyEvent.ACTION_UP) {
-                    if (mPttMediaKeyDown) {
-                        mPttMediaKeyDown = false;
-                        onTalkKeyUp();
-                    }
-                    return true;
-                }
-
-                return true;
-            }
-        });
-    }
-
-    /**
-     * Only media-style keys can reach this callback. The configured key still controls whether
-     * the event is treated as PTT, so ordinary media buttons are not hijacked by default.
-     */
-    private boolean isConfiguredMediaPttKey(int keyCode) {
-        if (mSettings == null || !RadioPttKeyManager.isConfiguredPttKey(keyCode, mSettings)) {
-            return false;
-        }
-
-        return RadioPttKeyManager.isMediaStyleKey(keyCode);
-    }
-
-    private void updatePttMediaSessionState() {
-        boolean pttMode = Settings.ARRAY_INPUT_METHOD_PTT.equals(mSettings.getInputMethod());
-        boolean shouldBeActive = pttMode
-                && (isConnectionEstablished() || isManagedRadioDevice());
-        setPttMediaSessionActive(shouldBeActive);
-    }
-
-    private void setPttMediaSessionActive(boolean active) {
-        if (mPttMediaSession == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
-            return;
-        }
-
-        if (active == mPttMediaSession.isActive()) {
-            return;
-        }
-
-        if (!active && mPttMediaKeyDown) {
-            mPttMediaKeyDown = false;
-            onTalkKeyUp();
-        }
-        mPttMediaSession.setActive(active);
-    }
-
-    /** True while at least one remote user is delivering audible voice. */
-    public boolean isRadioReceiving() {
-        return mRadioReceiveTracker.isReceiving();
-    }
-
-    @Override
-    public List<String> getRadioTalkers() {
-        return mRadioReceiveTracker.getActiveTalkers();
-    }
-
-    /**
-     * Called when a user presses a talk key down (i.e. when they want to talk).
-     * Accounts for talk logic if toggle PTT is on.
-     */
     @Override
     public void onTalkKeyDown() {
-        if (mPttInputDown || mPttWatchdogLockout) {
-            return;
-        }
-        if (mAprsTrackingManager != null) {
-            mAprsTrackingManager.onPttPressed();
-        }
-        boolean synchronizedSession = isSynchronized();
-        boolean managedRadio = isManagedRadioDevice();
-        boolean pttMode = Settings.ARRAY_INPUT_METHOD_PTT.equals(mSettings.getInputMethod());
-        boolean readyToTransmit = RadioPttSafetyPolicy.canStartTransmission(
-                synchronizedSession, pttMode, managedRadio, mRadioRoomReady);
-        wakeRadioDisplay(!readyToTransmit);
-        if (!readyToTransmit) {
-            playPttFailureAlert();
-            return;
-        }
-
-        mPttInputDown = true;
-        mPttFailureAlerted = false;
-        if (!mSettings.isPushToTalkToggle() && !isTalking()) {
-            setPttTalkingState(true); // Start talking
+        if (isConnectionEstablished() && "ptt".equals(this.mSettings.getInputMethod()) && !this.mSettings.isPushToTalkToggle() && !isTalking()) {
+            setTalkingState(true);
         }
     }
 
-    /**
-     * Called when a user releases a talk key (i.e. when they do not want to talk).
-     * Accounts for talk logic if toggle PTT is on.
-     */
     @Override
     public void onTalkKeyUp() {
-        RadioPttRecoveryGuard.noteRelease();
-        boolean wasLockedOut = mPttWatchdogLockout;
-        boolean wasTalking = isTalking();
-        boolean hadNoAudioPacket = wasTalking && mPttPressStartedElapsedRealtime > 0L
-                && getLastAudioPacketSentElapsedRealtime() < mPttPressStartedElapsedRealtime;
-        mPttInputDown = false;
-        mPttWatchdogLockout = false;
-        if (wasLockedOut) {
-            disarmPttTransmissionWatchdog();
-            mPttFailureAlerted = false;
-            return;
-        }
-        if(isConnectionEstablished()
-                && Settings.ARRAY_INPUT_METHOD_PTT.equals(mSettings.getInputMethod())) {
-            if (mSettings.isPushToTalkToggle()) {
-                setPttTalkingState(!wasTalking); // Toggle talk state
-            } else if (isTalking()) {
-                setPttTalkingState(false); // Stop talking
-            }
-        } else {
-            disarmPttTransmissionWatchdog();
-        }
-        if (hadNoAudioPacket && !mPttFailureAlerted) {
-            playPttFailureAlert();
-        }
-        mPttFailureAlerted = false;
-    }
-
-    @Override
-    public void onExternalTalkCommand(String status) {
-        if (mDestroying) {
-            return;
-        }
-        boolean readyToTransmit = RadioPttSafetyPolicy.canStartTransmission(
-                isSynchronized(),
-                Settings.ARRAY_INPUT_METHOD_PTT.equals(mSettings.getInputMethod()),
-                isManagedRadioDevice(),
-                mRadioRoomReady);
-        RadioExternalTalkPolicy.Decision decision = RadioExternalTalkPolicy.decide(
-                status,
-                isTalking(),
-                readyToTransmit,
-                mPttWatchdogLockout || RadioPttRecoveryGuard.isReleaseRequired());
-        if (decision == RadioExternalTalkPolicy.Decision.START) {
-            setPttTalkingState(true);
-        } else if (decision == RadioExternalTalkPolicy.Decision.STOP) {
-            // An explicit OFF (or toggle from ON) is the release edge for legacy control.
-            RadioPttRecoveryGuard.noteRelease();
-            releasePttForSafety(false);
-        } else if (decision == RadioExternalTalkPolicy.Decision.REJECT) {
-            Log.w(TAG, "External TALK start rejected by radio readiness or release gate");
-        } else if (decision == RadioExternalTalkPolicy.Decision.KEEP) {
-            // Do not extend an existing deadline, but adopt any legacy unarmed TX safely.
-            ensurePttTransmissionWatchdogArmed();
-        }
-    }
-
-    private void setPttTalkingState(boolean talking) {
-        boolean wasTalking = isTalking();
-        if (wasTalking == talking) {
-            if (talking) {
-                ensurePttTransmissionWatchdogArmed();
-            }
-            return;
-        }
-        setTalkingState(talking);
-        boolean isNowTalking = isTalking();
-        if (RadioPttWatchdogPolicy.shouldArm(wasTalking, isNowTalking)) {
-            armPttTransmissionWatchdog();
-        } else if (RadioPttWatchdogPolicy.shouldDisarm(wasTalking, isNowTalking)) {
-            disarmPttTransmissionWatchdog();
-        }
-    }
-
-    private void ensurePttTransmissionWatchdogArmed() {
-        if (isTalking() && !mPttWatchdogArmed) {
-            armPttTransmissionWatchdog();
-        }
-    }
-
-    private void armPttTransmissionWatchdog() {
-        mPttWatchdogHandler.removeCallbacks(mPttWatchdog);
-        mPttWatchdogHandler.removeCallbacks(mPttDeliveryFailureCheck);
-        mPttWatchdogArmed = true;
-        mPttFailureAlerted = false;
-        mPttPressStartedElapsedRealtime = SystemClock.elapsedRealtime();
-        mArmedPttMaximumSeconds = mMaximumPttSeconds;
-        mPttWatchdogHandler.postDelayed(mPttWatchdog,
-                RadioPttWatchdogPolicy.delayMillis(mArmedPttMaximumSeconds));
-        mPttWatchdogHandler.postDelayed(mPttDeliveryFailureCheck,
-                PTT_DELIVERY_CONFIRM_MS);
-    }
-
-    private void disarmPttTransmissionWatchdog() {
-        mPttWatchdogArmed = false;
-        mPttWatchdogHandler.removeCallbacks(mPttWatchdog);
-        mPttWatchdogHandler.removeCallbacks(mPttDeliveryFailureCheck);
-        mPttPressStartedElapsedRealtime = 0L;
-    }
-
-    @Override
-    public void requirePttRelease() {
-        RadioPttRecoveryGuard.requireRelease();
-        releasePttForSafety(true);
-    }
-
-    @Override
-    public void setRadioRoomReady(boolean ready) {
-        mRadioRoomReady = ready;
-    }
-
-    @Override
-    public void setMaximumPttSeconds(int maximumTxSeconds) {
-        int validated = RadioPttWatchdogPolicy.sanitizeMaximumSeconds(maximumTxSeconds);
-        if (mMaximumPttSeconds == validated) {
-            return;
-        }
-        boolean transmissionActive = mPttInputDown || isTalking();
-        if (transmissionActive) {
-            releasePttForSafety(true);
-        }
-        mMaximumPttSeconds = validated;
-    }
-
-    /** Stops TX and clears pending watchdog work during lifecycle or connection failures. */
-    private void releasePttForSafety(boolean requireRelease) {
-        disarmPttTransmissionWatchdog();
-        mPttInputDown = false;
-        mPttFailureAlerted = false;
-        mPttWatchdogLockout = requireRelease;
-        if (isTalking()) {
-            setPttTalkingState(false);
+        if (isConnectionEstablished() && "ptt".equals(this.mSettings.getInputMethod())) {
+            if (this.mSettings.isPushToTalkToggle()) setTalkingState(!isTalking());
+            else if (isTalking()) setTalkingState(false);
         }
     }
 
     @Override
-    public List<IChatMessage> getMessageLog() {
-        return Collections.unmodifiableList(mMessageLog);
-    }
+    public List<IChatMessage> getMessageLog() { return Collections.unmodifiableList(this.mMessageLog); }
 
     @Override
-    public void clearMessageLog() {
-        if (mMessageLog != null) {
-            mMessageLog.clear();
-        }
-    }
-
-    private void appendMessageLog(IChatMessage message) {
-        appendMessageLog(mMessageLog, message);
-    }
-
-    static void appendMessageLog(List<IChatMessage> messageLog, IChatMessage message) {
-        if (messageLog == null || message == null) {
-            return;
-        }
-        int overflow = messageLog.size() - MAX_MESSAGE_LOG_ENTRIES + 1;
-        if (overflow > 0) {
-            messageLog.subList(0, overflow).clear();
-        }
-        messageLog.add(message);
-    }
+    public void clearMessageLog() { if (this.mMessageLog != null) this.mMessageLog.clear(); }
 
     @Override
-    public void reloadTrackingConfig() {
-        if (mAprsTrackingManager == null
-                || !RadioDeviceProfile.T56.equals(RadioDeviceProfile.detectCurrent())) {
-            return;
-        }
-        final AprsTrackingManager manager = mAprsTrackingManager;
-        new Thread(() -> {
-            try {
-                manager.reloadConfig(new RadioConfigRepository(MumlaService.this)
-                        .loadActiveOrDefault());
-            } catch (Exception exception) {
-                Log.w(TAG, "T56 tracking config reload skipped: "
-                        + exception.getClass().getSimpleName());
-            }
-        }, "minimum-t56-tracking-config").start();
-    }
-
-    /** Requests a reload only when the service is already running. */
-    public static void reloadTrackingConfigIfRunning() {
-        MumlaService service = sRunningService;
-        if (service != null) {
-            service.reloadTrackingConfig();
-        }
-    }
-
-    /**
-     * Manifest receivers for these OEM implicit broadcasts are suppressed by Android 8 while the
-     * display is off. The foreground service remains alive, so a context receiver is the reliable
-     * lifecycle owner for the physical PTT edges.
-     */
-    private void registerRadioHardwarePttReceiver() {
-        String profile = RadioDeviceProfile.detectCurrent();
-        IntentFilter filter = new IntentFilter();
-        if (RadioDeviceProfile.RYKS.equals(profile)) {
-            filter.addAction(RadioHardwareKeyReceiver.ACTION_RYKS_PTT_DOWN);
-            filter.addAction(RadioHardwareKeyReceiver.ACTION_RYKS_PTT_UP);
-        } else if (RadioDeviceProfile.T56.equals(profile)) {
-            filter.addAction(RadioHardwareKeyReceiver.ACTION_T56_PTT_DOWN);
-            filter.addAction(RadioHardwareKeyReceiver.ACTION_T56_PTT_UP);
-        } else {
-            return;
-        }
-        mRadioHardwareKeyReceiver = new RadioHardwareKeyReceiver();
-        ContextCompat.registerReceiver(this, mRadioHardwareKeyReceiver, filter,
-                ContextCompat.RECEIVER_EXPORTED);
-    }
-
-    /**
-     * Sets whether or not notifications should be suppressed.
-     *
-     * It's typically a good idea to do this when the main activity is foreground, so that the user
-     * is not bombarded with redundant alerts.
-     *
-     * <b>Chat notifications are NOT suppressed.</b> They may be if a chat indicator is added in the
-     * activity itself. For now, the user may disable chat notifications manually.
-     *
-     * @param suppressNotifications true if Mumla is to disable notifications.
-     */
-    @Override
-    public void setSuppressNotifications(boolean suppressNotifications) {
-        mSuppressNotifications = suppressNotifications;
-    }
+    public void setSuppressNotifications(boolean suppressNotifications) { this.mSuppressNotifications = suppressNotifications; }
 
     public static class MumlaBinder extends Binder {
         private final MumlaService mService;
-
-        private MumlaBinder(MumlaService service) {
-            mService = service;
-        }
-
-        public IMumlaService getService() {
-            return mService;
-        }
+        private MumlaBinder(MumlaService service) { this.mService = service; }
+        public IMumlaService getService() { return this.mService; }
     }
 
-    @Override
     public Message sendUserTextMessage(int session, String message) {
         Message msg = super.sendUserTextMessage(session, message);
-
-        appendMessageLog(new IChatMessage.TextMessage(msg));
+        this.mMessageLog.add(new IChatMessage.TextMessage(msg));
         return msg;
     }
 
-    @Override
     public Message sendChannelTextMessage(int channel, String message, boolean tree) {
         Message msg = super.sendChannelTextMessage(channel, message, tree);
-
-        appendMessageLog(new IChatMessage.TextMessage(msg));
+        this.mMessageLog.add(new IChatMessage.TextMessage(msg));
         return msg;
     }
 }
