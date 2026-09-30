@@ -54,6 +54,7 @@ import androidx.activity.OnBackPressedCallback;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.ActionBarDrawerToggle;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.Toolbar;
 import androidx.core.app.ActivityCompat;
@@ -145,8 +146,9 @@ public class MumlaActivity extends AppCompatActivity implements ListView.OnItemC
     
     private boolean mAutoConnectAttempted = false;
 
-    private android.app.AlertDialog mConnectingDialog;
-    private android.app.AlertDialog mErrorDialog;
+    // PERBAIKAN: Gunakan androidx.appcompat.app.AlertDialog agar cocok dengan MaterialAlertDialogBuilder
+    private AlertDialog mConnectingDialog;
+    private AlertDialog mErrorDialog;
 
     private final List<HumlaServiceFragment> mServiceFragments = new ArrayList<>();
 
