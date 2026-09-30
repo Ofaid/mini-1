@@ -695,8 +695,8 @@ public class MumlaService extends HumlaService implements
         new Handler(Looper.getMainLooper()).postDelayed(() -> {
             if (!mDestroying && isConnectionEstablished() && !mPttWatchdogLockout) {
                 try {
-                    // Cek apakah sudah synchronized sebelum trigger
-                    if (isSynchronized()) {
+                    // Cek apakah session ID sudah valid (> 0) sebagai tanda sync selesai
+                    if (getSessionId() > 0) { 
                         onTalkKeyDown();
                         new Handler(Looper.getMainLooper()).postDelayed(() -> {
                             if (!mDestroying && isConnectionEstablished()) {
@@ -705,10 +705,10 @@ public class MumlaService extends HumlaService implements
                             }
                         }, 50);
                     } else {
-                        Log.w(TAG, "Skipping PTT sync trigger: Session not yet synchronized");
+                        Log.w(TAG, "Skipping PTT sync trigger: Session ID not yet valid");
                     }
                 } catch (Exception e) {
-                    Log.w(TAG, "Force sync via PTT toggle failed", e);
+                    Log.w(TAG, "Force sync via PTT toggle failed safely", e);
                 }
             }
         }, 1500);
