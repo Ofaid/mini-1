@@ -19,8 +19,10 @@
 
 <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
+    
+    <!-- PERUBAHAN 1: Default transmit mode diubah ke PTT -->
     <ListPreference
-        android:defaultValue="voiceActivity"
+        android:defaultValue="ptt" 
         android:entries="@array/audioInputNames"
         android:entryValues="@array/audioInputValues"
         android:key="audioInputMethod"
@@ -47,7 +49,6 @@
     <PreferenceCategory android:title="@string/voiceActivitySettings"
         android:key="vad_settings"
         app:iconSpaceReserved="false">
-        <!-- multiplier was previously 0.1, but never made sense, never worked -->
         <se.lublin.mumla.preference.SeekBarDialogPreference
             app:multiplier="1"
             android:defaultValue="50"
@@ -82,18 +83,22 @@
             android:summary="@string/pttSoundSum"
             android:title="@string/pttSound"
             app:iconSpaceReserved="true"/>
+            
         <CheckBoxPreference
             android:defaultValue="false"
             android:key="hidePtt"
             android:summary="@string/hidePttSum"
             android:title="@string/hidePtt"
             app:iconSpaceReserved="false"/>
+            
+        <!-- PERUBAHAN 2: Default toggle PTT diubah jadi TRUE -->
         <CheckBoxPreference
-            android:defaultValue="false"
+            android:defaultValue="true" 
             android:key="togglePtt"
             android:summary="@string/togglePttSum"
             android:title="@string/togglePtt"
             app:iconSpaceReserved="true"/>
+            
         <CheckBoxPreference
             android:defaultValue="false"
             android:key="half_duplex"
@@ -101,10 +106,10 @@
             android:summary="@string/halfDuplexSum"
             app:iconSpaceReserved="false"/>
     </PreferenceCategory>
+    
     <PreferenceCategory android:title="@string/advancedAudio"
         app:iconSpaceReserved="false">
 
-        <!-- TODO add an actual min of 8000hz -->
         <ListPreference
             android:key="input_quality"
             android:defaultValue="48000"
