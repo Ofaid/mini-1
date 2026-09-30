@@ -196,24 +196,25 @@ public class MumlaActivity extends AppCompatActivity implements ListView.OnItemC
     };
     
     private final HumlaObserver mObserver = new HumlaObserver() {
-        @Override
+     @Override
         public void onConnected() {
-            // --- FIX UTAMA: PAKSA SYNC STATE SAAT KONEKSI READY ---
-            // Trigger re-set channel ID untuk memaksa server kirim full state dump
-            // (pesan teks, user list, dan membuka gate audio stream)
+            // --- FIX SYNC STATE: TRIGGER VIA MUTE TOGGLE ---
+            // Toggle mute/deafen sekejap untuk memaksa server kirim full state dump
+            // Ini workaround karena IHumlaSession tidak expose getChannelId/setChannel
             new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
                 if (mService != null && mService.isConnected()) {
                     try {
-                        IHumlaSession session = getService().HumlaSession();
-                        if (session != null) {
-                            int currentChannel = session.getChannelId();
-                            if (currentChannel > 0) {
-                                session.setChannel(currentChannel);
-                                Log.d(TAG, "Force state sync triggered in onConnected");
+                        // Trik: Toggle deafen ON-OFF sekejap (50ms)
+                        // Server akan merespons dengan UserState + ChannelState lengkap
+                        mService.setSelfDeafened(true);
+                        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+                            if (mService != null && mService.isConnected()) {
+                                mService.setSelfDeafened(false);
+                                Log.d(TAG, "Force state sync triggered via deafen toggle");
                             }
-                        }
+                        }, 50);
                     } catch (Exception e) {
-                        Log.w(TAG, "Force sync in onConnected failed", e);
+                        Log.w(TAG, "Force sync via deafen toggle failed", e);
                     }
                 }
             }, 1000); 
@@ -228,6 +229,7 @@ public class MumlaActivity extends AppCompatActivity implements ListView.OnItemC
             supportInvalidateOptionsMenu();
             updateConnectionState(getService());
         }
+            
 
         @Override
         public void onConnecting() {
