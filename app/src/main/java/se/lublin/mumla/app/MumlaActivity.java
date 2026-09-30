@@ -155,8 +155,8 @@ public class MumlaActivity extends AppCompatActivity implements ListView.OnItemC
     private AlertDialog mErrorDialog;
 
     private final List<HumlaServiceFragment> mServiceFragments = new ArrayList<>();
-
-    private final ServiceConnection mConnection = new ServiceConnection() {
+//==================
+   private final ServiceConnection mConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
             mService = ((MumlaService.MumlaBinder) service).getService();
@@ -168,27 +168,27 @@ public class MumlaActivity extends AppCompatActivity implements ListView.OnItemC
             for (HumlaServiceFragment fragment : mServiceFragments)
                 fragment.setServiceBound(true);
 
-            // Auto connect jika service siap dan setup sudah selesai
+            // Auto connect jika service siap DAN setup sudah selesai
+            // (Dialog akan dimunculkan oleh onResume jika setup belum selesai)
             if (!EMBEDDED_SERVER_HOST.isEmpty() && !mAutoConnectAttempted) {
                 mAutoConnectAttempted = true;
-                Server embedded = findOrCreateEmbeddedServer();
-                if (embedded != null) {
-                    // Cek apakah setup sudah pernah dilakukan via SharedPreferences
-                    boolean isSetupDone = PreferenceManager.getDefaultSharedPreferences(MumlaActivity.this)
-                            .getBoolean(PREF_EMBEDDED_SETUP_DONE, false);
-                    
-                    if (isSetupDone) {
+                
+                boolean isSetupDone = PreferenceManager.getDefaultSharedPreferences(MumlaActivity.this)
+                        .getBoolean(PREF_EMBEDDED_SETUP_DONE, false);
+                
+                if (isSetupDone) {
+                    Server embedded = findOrCreateEmbeddedServer();
+                    if (embedded != null) {
                         connectToServer(embedded);
                     } else {
-                        // Jika belum setup, tampilkan dialog di onResume nanti
                         loadDrawerFragment(DrawerAdapter.ITEM_FAVOURITES);
                     }
                 } else {
+                    // Jika belum setup, tampilkan list favorites sementara 
+                    // sampai onResume memicu dialog
                     loadDrawerFragment(DrawerAdapter.ITEM_FAVOURITES);
                 }
-            } else if (savedInstanceState == null && EMBEDDED_SERVER_HOST.isEmpty()) {
-                 loadDrawerFragment(DrawerAdapter.ITEM_FAVOURITES);
-            }
+            } 
             
             updateConnectionState(getService());
         }
@@ -198,7 +198,8 @@ public class MumlaActivity extends AppCompatActivity implements ListView.OnItemC
             mService = null;
         }
     };
-
+    
+//======================
     private final HumlaObserver mObserver = new HumlaObserver() {
         @Override
         public void onConnected() {
