@@ -22,7 +22,6 @@ import static java.util.Objects.requireNonNull;
 import android.Manifest;
 import android.content.ComponentName;
 import android.content.Context;
-import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.ServiceConnection;
 import android.content.SharedPreferences;
@@ -41,7 +40,6 @@ import android.view.KeyEvent;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
-import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.widget.AdapterView;
 import android.widget.EditText;
@@ -56,7 +54,6 @@ import androidx.activity.OnBackPressedCallback;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.ActionBarDrawerToggle;
-import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.Toolbar;
 import androidx.core.app.ActivityCompat;
@@ -74,7 +71,6 @@ import org.spongycastle.util.encoders.Hex;
 
 import java.io.ByteArrayOutputStream;
 import java.net.InetSocketAddress;
-import java.net.MalformedURLException;
 import java.net.Socket;
 import java.security.KeyStore;
 import java.security.MessageDigest;
@@ -97,7 +93,6 @@ import se.lublin.humla.net.HumlaConnection;
 import se.lublin.humla.protobuf.Mumble;
 import se.lublin.humla.util.HumlaException;
 import se.lublin.humla.util.HumlaObserver;
-import se.lublin.humla.util.MumbleURLParser;
 import se.lublin.mumla.BuildConfig;
 import se.lublin.mumla.R;
 import se.lublin.mumla.Settings;
@@ -109,7 +104,6 @@ import se.lublin.mumla.db.DatabaseProvider;
 import se.lublin.mumla.db.MumlaDatabase;
 import se.lublin.mumla.db.MumlaSQLiteDatabase;
 import se.lublin.mumla.db.PublicServer;
-import se.lublin.mumla.preference.MumlaCertificateGenerateTask;
 import se.lublin.mumla.preference.SettingsActivity;
 import se.lublin.mumla.servers.FavouriteServerListFragment;
 import se.lublin.mumla.servers.PublicServerListFragment;
@@ -151,8 +145,8 @@ public class MumlaActivity extends AppCompatActivity implements ListView.OnItemC
     
     private boolean mAutoConnectAttempted = false;
 
-    private AlertDialog mConnectingDialog;
-    private AlertDialog mErrorDialog;
+    private android.app.AlertDialog mConnectingDialog;
+    private android.app.AlertDialog mErrorDialog;
 
     private final List<HumlaServiceFragment> mServiceFragments = new ArrayList<>();
 
@@ -196,30 +190,9 @@ public class MumlaActivity extends AppCompatActivity implements ListView.OnItemC
     };
     
     private final HumlaObserver mObserver = new HumlaObserver() {
-     @Override
+        @Override
         public void onConnected() {
-            // --- FIX SYNC STATE: TRIGGER VIA MUTE TOGGLE ---
-            // Toggle mute/deafen sekejap untuk memaksa server kirim full state dump
-            // Ini workaround karena IHumlaSession tidak expose getChannelId/setChannel
-            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
-                if (mService != null && mService.isConnected()) {
-                    try {
-                        // Trik: Toggle deafen ON-OFF sekejap (50ms)
-                        // Server akan merespons dengan UserState + ChannelState lengkap
-                        mService.setSelfDeafened(true);
-                        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
-                            if (mService != null && mService.isConnected()) {
-                                mService.setSelfDeafened(false);
-                                Log.d(TAG, "Force state sync triggered via deafen toggle");
-                            }
-                        }, 50);
-                    } catch (Exception e) {
-                        Log.w(TAG, "Force sync via deafen toggle failed", e);
-                    }
-                }
-            }, 1000); 
-            // -------------------------------------------------------
-
+            // VERSI BERSIH TANPA KODE SYNC STATE YANG ERROR
             if (mSettings.shouldStartUpInPinnedMode()) {
                 loadDrawerFragment(DrawerAdapter.ITEM_PINNED_CHANNELS);
             } else {
@@ -229,7 +202,6 @@ public class MumlaActivity extends AppCompatActivity implements ListView.OnItemC
             supportInvalidateOptionsMenu();
             updateConnectionState(getService());
         }
-            
 
         @Override
         public void onConnecting() {
