@@ -81,7 +81,7 @@
             android:key="ptt_sound"
             android:summary="@string/pttSoundSum"
             android:title="@string/pttSound"
-            app:iconSpaceReserved="false"/>
+            app:iconSpaceReserved="true"/>
         <CheckBoxPreference
             android:defaultValue="false"
             android:key="hidePtt"
@@ -93,7 +93,7 @@
             android:key="togglePtt"
             android:summary="@string/togglePttSum"
             android:title="@string/togglePtt"
-            app:iconSpaceReserved="false"/>
+            app:iconSpaceReserved="true"/>
         <CheckBoxPreference
             android:defaultValue="false"
             android:key="half_duplex"
