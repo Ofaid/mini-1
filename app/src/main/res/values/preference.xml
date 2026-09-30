@@ -21,6 +21,9 @@
     <string name="inputMethodVoice">Voice activity</string>
     <string name="inputMethodPtt">Push-to-talk</string>
     <string name="inputMethodContinuous">Continuous</string>
+    
+    <!-- TAMBAHAN BARU: String untuk PTT Toggle -->
+    <string name="inputMethodPttToggle">PTT Toggle</string>
 
     <!-- Theme names -->
     <string name="theme_system">System default</string>
@@ -35,7 +38,7 @@
     <string name="hot_corner_top_left">↖ top left</string>
     <string name="hot_corner_bottom_left">↙ bottom Left</string>
     <string name="hot_corner_top_right">Top right ↗</string>
-    <string name="hot_corner_bottom_right">bottom right ↘</string>
+    <string name="hot_corner_bottom_right">bottom right </string>
 
     <!-- About -->
     <string name="about">About</string>
