@@ -20,14 +20,14 @@ package se.lublin.mumla.servers;
 import android.app.Activity;
 import android.app.Dialog;
 import android.content.Context;
-import android.content.DialogInterface;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
-import android.view.ViewGroup;
 import android.widget.EditText;
 import android.widget.TextView;
 
+import androidx.annotation.NonNull;
+import androidx.appcompat.app.AlertDialog;
 import androidx.fragment.app.DialogFragment;
 import androidx.fragment.app.Fragment;
 
@@ -38,85 +38,85 @@ import se.lublin.mumla.R;
 import se.lublin.mumla.Settings;
 
 public class ServerEditFragment extends DialogFragment {
+    private static final String ARGUMENT_SERVER = "server";
     private static final String ARGUMENT_ACTION = "action";
     private static final String ARGUMENT_IGNORE_TITLE = "ignore_title";
-    private static final String ARGUMENT_SERVER = "server";
 
-    private EditText mHostEdit;
-    private ServerEditListener mListener;
     private EditText mNameEdit;
-    private EditText mPasswordEdit;
+    private EditText mHostEdit;
     private EditText mPortEdit;
     private EditText mUsernameEdit;
+    private EditText mPasswordEdit;
 
-    public enum Action {
-        CONNECT_ACTION,
-        EDIT_ACTION,
-        ADD_ACTION
-    }
+    private ServerEditListener mListener;
 
-    public interface ServerEditListener {
-        void onServerEdited(Action action, Server server);
-    }
-
-    public static ServerEditFragment createServerEditDialog(Context context, Server server,
-                                                            Action action, boolean ignoreTitle) {
+    /**
+     * Creates a new {@link ServerEditFragment} dialog. Results will be delivered to the parent
+     * activity via {@link ServerEditListener}.
+     * @param server Optional, if set will populate the fragment with data from the server.
+     * @param action The action the fragment is performing (i.e. Add, Edit)
+     * @param ignoreTitle If true, don't show fields related to the server title (useful for quick
+     *                    connect dialogs)
+     */
+    public static DialogFragment createServerEditDialog(Context context, Server server,
+                                                        Action action,
+                                                        boolean ignoreTitle) {
         Bundle args = new Bundle();
         args.putParcelable(ARGUMENT_SERVER, server);
         args.putInt(ARGUMENT_ACTION, action.ordinal());
         args.putBoolean(ARGUMENT_IGNORE_TITLE, ignoreTitle);
-        return (ServerEditFragment) Fragment.instantiate(
-                context, ServerEditFragment.class.getName(), args);
+        return (DialogFragment) Fragment.instantiate(context, ServerEditFragment.class.getName(), args);
     }
 
     @Override
     public void onAttach(Activity activity) {
         super.onAttach(activity);
         try {
-            this.mListener = (ServerEditListener) activity;
+            mListener = (ServerEditListener) activity;
         } catch (ClassCastException e) {
-            throw new ClassCastException(activity.toString() +
-                    " must implement ServerEditListener!");
+            throw new ClassCastException(activity.toString() + " must implement ServerEditListener!");
         }
     }
 
     @Override
     public void onStart() {
         super.onStart();
-        getDialog().getButton(Dialog.BUTTON_POSITIVE).setOnClickListener(new View.OnClickListener() {
+        // Override positive button to not automatically dismiss on press.
+        // We can't accomplish this with AlertDialog.Builder.
+        ((AlertDialog)getDialog()).getButton(Dialog.BUTTON_POSITIVE).setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                if (ServerEditFragment.this.validate()) {
-                    Server server = ServerEditFragment.this.createServer();
-                    ServerEditFragment.this.mListener.onServerEdited(
-                            ServerEditFragment.this.getAction(), server);
-                    ServerEditFragment.this.dismiss();
+                if (validate()) {
+                    Server server = createServer();
+                    mListener.onServerEdited(getAction(), server);
+                    dismiss();
                 }
             }
         });
     }
 
+    @NonNull
     @Override
     public Dialog onCreateDialog(Bundle savedInstanceState) {
-        String actionName;
         Settings settings = Settings.getInstance(getActivity());
 
-        switch (getAction().ordinal()) {
-            case 0: // CONNECT_ACTION
-                actionName = getString(R.string.connect);
+        String actionName;
+        switch (getAction()) {
+            case ADD_ACTION:
+                actionName = getString(R.string.add);
                 break;
-            case 1: // EDIT_ACTION
+            case EDIT_ACTION:
                 actionName = getString(android.R.string.ok);
                 break;
-            case 2: // ADD_ACTION
-                actionName = getString(R.string.add);
+            case CONNECT_ACTION:
+                actionName = getString(R.string.connect);
                 break;
             default:
                 throw new RuntimeException("Unknown action " + getAction());
         }
 
         LayoutInflater inflater = LayoutInflater.from(getActivity());
-        View view = inflater.inflate(R.layout.dialog_server_edit, (ViewGroup) null, false);
+        View view = inflater.inflate(R.layout.dialog_server_edit, null, false);
 
         TextView titleLabel = view.findViewById(R.id.server_edit_name_title);
         mNameEdit = view.findViewById(R.id.server_edit_name);
@@ -142,14 +142,6 @@ public class ServerEditFragment extends DialogFragment {
             mNameEdit.setVisibility(View.GONE);
         }
 
-        final EditText firstField = shouldIgnoreTitle() ? mHostEdit : mNameEdit;
-        view.post(new Runnable() {
-            @Override
-            public void run() {
-                firstField.requestFocus();
-            }
-        });
-
         return new MaterialAlertDialogBuilder(requireActivity())
                 .setPositiveButton(actionName, null)
                 .setNegativeButton(android.R.string.cancel, null)
@@ -158,28 +150,27 @@ public class ServerEditFragment extends DialogFragment {
     }
 
     public Server createServer() {
+        String name = (mNameEdit).getText().toString().trim();
+        String host = (mHostEdit).getText().toString().trim();
+
         int port;
-        String username;
-        long id;
-
-        String name = mNameEdit.getText().toString().trim();
-        String host = mHostEdit.getText().toString().trim();
-
         try {
-            port = Integer.parseInt(mPortEdit.getText().toString());
-        } catch (NumberFormatException e) {
+            port = Integer.parseInt((mPortEdit).getText().toString());
+        } catch (final NumberFormatException ex) {
+            // Setting 0, meaning that port isn't configured. Consumers of
+            // Server.getPort() will have to deal with that. Like displaying
+            // nothing, looking up SRV record, using Constants.DEFAULT_PORT.
             port = 0;
         }
 
-        String username2 = mUsernameEdit.getText().toString().trim();
+        String username = (mUsernameEdit).getText().toString().trim();
         String password = mPasswordEdit.getText().toString();
 
-        if (!username2.equals("")) {
-            username = username2;
-        } else {
+        if (username.equals(""))
             username = mUsernameEdit.getHint().toString();
-        }
 
+        // Inherit database ID of provided server.
+        long id;
         if (getServer() != null) {
             id = getServer().getId();
         } else {
@@ -189,22 +180,23 @@ public class ServerEditFragment extends DialogFragment {
         return new Server(id, name, host, port, username, password);
     }
 
+    /**
+     * Checks all fields in this ServerEditFragment for validity.
+     * If an invalid field is found, an error is shown and false is returned.
+     * @return true if the inputted values are valid, false otherwise.
+     */
     public boolean validate() {
         if (mHostEdit.getText().length() == 0) {
             mHostEdit.setError(getString(R.string.invalid_host));
             return false;
-        }
-
-        if (mPortEdit.getText().length() > 0) {
+        } else if (mPortEdit.getText().length() > 0) {
             try {
                 int port = Integer.parseInt(mPortEdit.getText().toString());
-                if (port >= 1 && port <= 65535) {
-                    // port ok — lanjut
-                } else {
+                if (port < 1 || port > 65535) {
                     mPortEdit.setError(getString(R.string.invalid_port_range));
                     return false;
                 }
-            } catch (NumberFormatException e) {
+            } catch (NumberFormatException nfe) {
                 mPortEdit.setError(getString(R.string.invalid_port_range));
                 return false;
             }
@@ -222,5 +214,15 @@ public class ServerEditFragment extends DialogFragment {
 
     private boolean shouldIgnoreTitle() {
         return getArguments().getBoolean(ARGUMENT_IGNORE_TITLE);
+    }
+
+    public interface ServerEditListener {
+        void onServerEdited(Action action, Server server);
+    }
+
+    public enum Action {
+        CONNECT_ACTION,
+        EDIT_ACTION,
+        ADD_ACTION
     }
 }
