@@ -270,10 +270,24 @@ public class ChannelFragment extends HumlaServiceFragment implements SharedPrefe
     @Override
     public void onServiceBound(IHumlaService service) {
         super.onServiceBound(service);
+        
+        // Fungsi helper untuk refresh state UI
+        Runnable refreshUi = () -> {
+            if (getService() != null && getService().isConnected()) {
+                configureTargetPanel();
+                configureInput();
+                Log.d(TAG, "UI State refreshed via onServiceBound");
+            }
+        };
+
+        // Trigger awal (sama seperti kode asli)
         if (service.getConnectionState() == HumlaService.ConnectionState.CONNECTED) {
-            configureTargetPanel();
-            configureInput();
+            refreshUi.run();
         }
+
+        // TRIGGER KEDUA: Delay 1500ms untuk memastikan TLS handshake & audio engine fully ready
+        // Ini meniru efek "pindah channel" dengan memaksa fragment re-check state saat sudah stabil
+        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(refreshUi, 1500);
     }
 
     private void configureTargetPanel() {
