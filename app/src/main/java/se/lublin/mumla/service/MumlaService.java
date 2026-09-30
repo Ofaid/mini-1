@@ -638,7 +638,7 @@ public class MumlaService extends HumlaService implements
     }
 
     // ============================================================
-    // === FIX AUDIO UTAMA: WAKE UP ENGINE SAAT SYNC ===
+    // === FIX UTAMA: WAKE UP ENGINE & FORCE SYNC SAAT CONNECT ===
     // ============================================================
     @Override
     public void onConnectionSynchronized() {
@@ -672,7 +672,7 @@ public class MumlaService extends HumlaService implements
 
         updatePttMediaSessionState();
 
-        // --- MODIFIKASI BARU: PAKSA INIT AUDIO STREAM AGAR LANGSUNG NYALA ---
+        // --- MODIFIKASI 1: PAKSA INIT AUDIO STREAM AGAR LANGSUNG NYALA ---
         Bundle audioExtras = new Bundle();
         // Set stream type sesuai mode handset (0=Voice Call, 3=Music)
         audioExtras.putInt(HumlaService.EXTRAS_AUDIO_STREAM, 
@@ -688,6 +688,27 @@ public class MumlaService extends HumlaService implements
         } catch (AudioException e) {
             Log.e(TAG, "Failed to init audio stream", e);
         }
+
+        // --- MODIFIKASI 2: TRIGGER SYNC STATE VIA PTT TOGGLE ---
+        // Trik: Simulasi tekan & lepas PTT selama 50ms setelah delay 1 detik
+        // Ini memaksa library Humla mengirim UserState ke server, 
+        // yang kemudian dibalas dengan full state dump (pesan bot, audio stream, user list)
+        // Tanpa perlu pindah channel manual atau memanggil method yang tidak ada di interface
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            if (!mDestroying && isConnectionEstablished()) {
+                try {
+                    onTalkKeyDown();
+                    new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                        if (!mDestroying && isConnectionEstablished()) {
+                            onTalkKeyUp();
+                            Log.d(TAG, "Force state sync triggered via PTT toggle");
+                        }
+                    }, 50);
+                } catch (Exception e) {
+                    Log.w(TAG, "Force sync via PTT toggle failed", e);
+                }
+            }
+        }, 1000);
         // -------------------------------------------------------------------
     }
     // ============================================================
