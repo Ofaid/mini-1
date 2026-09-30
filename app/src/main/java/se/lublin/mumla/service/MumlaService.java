@@ -689,26 +689,29 @@ public class MumlaService extends HumlaService implements
             Log.e(TAG, "Failed to init audio stream", e);
         }
 
-        // --- MODIFIKASI 2: TRIGGER SYNC STATE VIA PTT TOGGLE ---
-        // Trik: Simulasi tekan & lepas PTT selama 50ms setelah delay 1 detik
-        // Ini memaksa library Humla mengirim UserState ke server, 
-        // yang kemudian dibalas dengan full state dump (pesan bot, audio stream, user list)
-        // Tanpa perlu pindah channel manual atau memanggil method yang tidak ada di interface
+        // --- MODIFIKASI 2: TRIGGER SYNC STATE VIA PTT TOGGLE (SAFE MODE) ---
+        // Delay diperpanjang jadi 1500ms agar safety policy & session benar-benar ready
+        // Ini mencegah infinite retry loop yang bikin hang 20 menit
         new Handler(Looper.getMainLooper()).postDelayed(() -> {
-            if (!mDestroying && isConnectionEstablished()) {
+            if (!mDestroying && isConnectionEstablished() && !mPttWatchdogLockout) {
                 try {
-                    onTalkKeyDown();
-                    new Handler(Looper.getMainLooper()).postDelayed(() -> {
-                        if (!mDestroying && isConnectionEstablished()) {
-                            onTalkKeyUp();
-                            Log.d(TAG, "Force state sync triggered via PTT toggle");
-                        }
-                    }, 50);
+                    // Cek apakah session ID sudah valid (> 0) sebagai tanda sync selesai
+                    if (getSessionId() > 0) { 
+                        onTalkKeyDown();
+                        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                            if (!mDestroying && isConnectionEstablished()) {
+                                onTalkKeyUp();
+                                Log.d(TAG, "Force state sync triggered via PTT toggle (Safe Mode)");
+                            }
+                        }, 50);
+                    } else {
+                        Log.w(TAG, "Skipping PTT sync trigger: Session ID not yet valid");
+                    }
                 } catch (Exception e) {
-                    Log.w(TAG, "Force sync via PTT toggle failed", e);
+                    Log.w(TAG, "Force sync via PTT toggle failed safely", e);
                 }
             }
-        }, 1000);
+        }, 1500);
         // -------------------------------------------------------------------
     }
     // ============================================================
