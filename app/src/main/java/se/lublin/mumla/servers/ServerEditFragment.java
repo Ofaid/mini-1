@@ -28,8 +28,8 @@ import android.view.ViewGroup;
 import android.widget.EditText;
 import android.widget.TextView;
 
-import androidx.annotation.NonNull;
 import androidx.fragment.app.DialogFragment;
+import androidx.fragment.app.Fragment;
 
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
@@ -61,142 +61,146 @@ public class ServerEditFragment extends DialogFragment {
 
     public static ServerEditFragment createServerEditDialog(Context context, Server server,
                                                             Action action, boolean ignoreTitle) {
-        ServerEditFragment frag = new ServerEditFragment();
         Bundle args = new Bundle();
         args.putParcelable(ARGUMENT_SERVER, server);
         args.putInt(ARGUMENT_ACTION, action.ordinal());
         args.putBoolean(ARGUMENT_IGNORE_TITLE, ignoreTitle);
-        frag.setArguments(args);
-        return frag;
+        return (ServerEditFragment) Fragment.instantiate(
+                context, ServerEditFragment.class.getName(), args);
     }
 
     @Override
-    public void onAttach(@NonNull Activity activity) {
+    public void onAttach(Activity activity) {
         super.onAttach(activity);
         try {
-            mListener = (ServerEditListener) activity;
+            this.mListener = (ServerEditListener) activity;
         } catch (ClassCastException e) {
-            throw new ClassCastException(activity + " harus mengimplementasikan ServerEditListener!");
+            throw new ClassCastException(activity.toString() +
+                    " must implement ServerEditListener!");
         }
     }
 
     @Override
     public void onStart() {
         super.onStart();
-        Dialog d = getDialog();
-        if (d == null) return;
-
-        // Tombol konfirmasi — ikuti alur asli: validasi dulu → kirim → tutup
-        d.getButton(Dialog.BUTTON_POSITIVE).setOnClickListener(v -> {
-            if (!validate()) return; // ❌ salah, berhenti di sini
-
-            Server server = buatServerDariInput(); // ✅ susun data
-            mListener.onServerEdited(getTindakan(), server); // 📤 kirim ke aktivitas
-            dismiss(); // ✅ tutup
+        getDialog().getButton(Dialog.BUTTON_POSITIVE).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (ServerEditFragment.this.validate()) {
+                    Server server = ServerEditFragment.this.createServer();
+                    ServerEditFragment.this.mListener.onServerEdited(
+                            ServerEditFragment.this.getAction(), server);
+                    ServerEditFragment.this.dismiss();
+                }
+            }
         });
     }
 
-    @NonNull
     @Override
     public Dialog onCreateDialog(Bundle savedInstanceState) {
-        Settings set = Settings.getInstance(requireActivity());
-        Action tindakan = getTindakan();
-        String teksTombol;
+        String actionName;
+        Settings settings = Settings.getInstance(getActivity());
 
-        // Sesuaikan teks tombol sesuai tindakan — PERSIS aslinya
-        switch (tindakan) {
-            case CONNECT_ACTION: teksTombol = getString(R.string.connect); break;
-            case EDIT_ACTION:    teksTombol = getString(android.R.string.ok); break;
-            case ADD_ACTION:     teksTombol = getString(R.string.add); break;
-            default: throw new IllegalStateException("Tindakan tidak dikenal: " + tindakan);
+        switch (getAction().ordinal()) {
+            case 0: // CONNECT_ACTION
+                actionName = getString(R.string.connect);
+                break;
+            case 1: // EDIT_ACTION
+                actionName = getString(android.R.string.ok);
+                break;
+            case 2: // ADD_ACTION
+                actionName = getString(R.string.add);
+                break;
+            default:
+                throw new RuntimeException("Unknown action " + getAction());
         }
 
-        View tampilan = LayoutInflater.from(getActivity())
-                .inflate(R.layout.dialog_server_edit, null, false);
+        LayoutInflater inflater = LayoutInflater.from(getActivity());
+        View view = inflater.inflate(R.layout.dialog_server_edit, (ViewGroup) null, false);
 
-        TextView labelNama = tampilan.findViewById(R.id.server_edit_name_title);
-        mNameEdit     = tampilan.findViewById(R.id.server_edit_name);
-        mHostEdit     = tampilan.findViewById(R.id.server_edit_host);
-        mPortEdit     = tampilan.findViewById(R.id.server_edit_port);
-        mUsernameEdit = tampilan.findViewById(R.id.server_edit_username);
-        mPasswordEdit = tampilan.findViewById(R.id.server_edit_password);
+        TextView titleLabel = view.findViewById(R.id.server_edit_name_title);
+        mNameEdit = view.findViewById(R.id.server_edit_name);
+        mHostEdit = view.findViewById(R.id.server_edit_host);
+        mPortEdit = view.findViewById(R.id.server_edit_port);
+        mUsernameEdit = view.findViewById(R.id.server_edit_username);
+        mUsernameEdit.setHint(settings.getDefaultUsername());
+        mPasswordEdit = view.findViewById(R.id.server_edit_password);
 
-        // Petunjuk nama pengguna dari pengaturan — seperti aslinya
-        mUsernameEdit.setHint(set.getDefaultUsername());
-
-        // Isi data lama jika ada
-        Server serverLama = getServerTersimpan();
-        if (serverLama != null) {
-            mNameEdit.setText(serverLama.getName());
-            mHostEdit.setText(serverLama.getHost());
-            if (serverLama.getPort() != 0) {
-                mPortEdit.setText(String.valueOf(serverLama.getPort()));
+        Server oldServer = getServer();
+        if (oldServer != null) {
+            mNameEdit.setText(oldServer.getName());
+            mHostEdit.setText(oldServer.getHost());
+            if (oldServer.getPort() != 0) {
+                mPortEdit.setText(String.valueOf(oldServer.getPort()));
             }
-            mUsernameEdit.setText(serverLama.getUsername());
-            mPasswordEdit.setText(serverLama.getPassword());
+            mUsernameEdit.setText(oldServer.getUsername());
+            mPasswordEdit.setText(oldServer.getPassword());
         }
 
-        // Sembunyikan kolom nama jika diminta
-        if (abaikanJudul()) {
-            labelNama.setVisibility(View.GONE);
+        if (shouldIgnoreTitle()) {
+            titleLabel.setVisibility(View.GONE);
             mNameEdit.setVisibility(View.GONE);
         }
 
-        // Fokus ke kolom pertama
-        View kolomPertama = abaikanJudul() ? mHostEdit : mNameEdit;
-        tampilan.post(() -> kolomPertama.requestFocus());
+        final EditText firstField = shouldIgnoreTitle() ? mHostEdit : mNameEdit;
+        view.post(new Runnable() {
+            @Override
+            public void run() {
+                firstField.requestFocus();
+            }
+        });
 
         return new MaterialAlertDialogBuilder(requireActivity())
-                .setView(tampilan)
-                .setPositiveButton(teksTombol, null)
+                .setPositiveButton(actionName, null)
                 .setNegativeButton(android.R.string.cancel, null)
+                .setView(view)
                 .create();
     }
 
-    // ✅ Ikuti urutan asli: baca → perbaiki kosong → susun objek
-    @NonNull
-    private Server buatServerDariInput() {
+    public Server createServer() {
+        int port;
+        String username;
         long id;
-        String nama = mNameEdit.getText().toString().trim();
+
+        String name = mNameEdit.getText().toString().trim();
         String host = mHostEdit.getText().toString().trim();
-        int port = bacaPort();
-        String namaPengguna = bacaNamaPengguna();
-        String sandi = mPasswordEdit.getText().toString();
 
-        Server lama = getServerTersimpan();
-        id = (lama != null) ? lama.getId() : -1;
-
-        return new Server(id, nama, host, port, namaPengguna, sandi);
-    }
-
-    private int bacaPort() {
         try {
-            return Integer.parseInt(mPortEdit.getText().toString().trim());
+            port = Integer.parseInt(mPortEdit.getText().toString());
         } catch (NumberFormatException e) {
-            return 0; // kosong/salah = pakai baku
+            port = 0;
         }
+
+        String username2 = mUsernameEdit.getText().toString().trim();
+        String password = mPasswordEdit.getText().toString();
+
+        if (!username2.equals("")) {
+            username = username2;
+        } else {
+            username = mUsernameEdit.getHint().toString();
+        }
+
+        if (getServer() != null) {
+            id = getServer().getId();
+        } else {
+            id = -1;
+        }
+
+        return new Server(id, name, host, port, username, password);
     }
 
-    @NonNull
-    private String bacaNamaPengguna() {
-        String ketik = mUsernameEdit.getText().toString().trim();
-        return ketik.isEmpty() ? mUsernameEdit.getHint().toString() : ketik;
-    }
-
-    // ✅ Validasi PERSIS seperti aslinya
-    private boolean validate() {
-        // Host wajib diisi
+    public boolean validate() {
         if (mHostEdit.getText().length() == 0) {
             mHostEdit.setError(getString(R.string.invalid_host));
             return false;
         }
 
-        // Port janggal?
-        String teksPort = mPortEdit.getText().toString().trim();
-        if (!teksPort.isEmpty()) {
+        if (mPortEdit.getText().length() > 0) {
             try {
-                int p = Integer.parseInt(teksPort);
-                if (p < 1 || p > 65535) {
+                int port = Integer.parseInt(mPortEdit.getText().toString());
+                if (port >= 1 && port <= 65535) {
+                    // port ok — lanjut
+                } else {
                     mPortEdit.setError(getString(R.string.invalid_port_range));
                     return false;
                 }
@@ -205,21 +209,18 @@ public class ServerEditFragment extends DialogFragment {
                 return false;
             }
         }
-        return true; // ✅ semua oke
+        return true;
     }
 
-    private Action getTindakan() {
-        Bundle b = getArguments();
-        return Action.values()[b.getInt(ARGUMENT_ACTION)];
+    private Server getServer() {
+        return getArguments().getParcelable(ARGUMENT_SERVER);
     }
 
-    private Server getServerTersimpan() {
-        Bundle b = getArguments();
-        return (b != null) ? b.getParcelable(ARGUMENT_SERVER) : null;
+    private Action getAction() {
+        return Action.values()[getArguments().getInt(ARGUMENT_ACTION)];
     }
 
-    private boolean abaikanJudul() {
-        Bundle b = getArguments();
-        return (b != null) && b.getBoolean(ARGUMENT_IGNORE_TITLE);
+    private boolean shouldIgnoreTitle() {
+        return getArguments().getBoolean(ARGUMENT_IGNORE_TITLE);
     }
 }
