@@ -227,55 +227,80 @@ public class MumlaActivity extends AppCompatActivity implements ListView.OnItemC
             supportInvalidateOptionsMenu();
             updateConnectionState(getService());
         }
-
-        @Override
-        public void onTLSHandshakeFailed(X509Certificate[] chain) {
-            if (chain.length == 0) return;
-            final Server lastServer = getService().getTargetServer();
-            try {
-                final X509Certificate x509 = chain[0];
-                View layout = getLayoutInflater().inflate(R.layout.certificate_info, null);
-                TextView textView = layout.findViewById(R.id.certificate_info_text);
-                try {
-                    MessageDigest digest1 = MessageDigest.getInstance("SHA-1");
-                    MessageDigest digest2 = MessageDigest.getInstance("SHA-256");
-                    String hexDigest1 = new String(Hex.encode(digest1.digest(x509.getEncoded())))
-                            .replaceAll("(..)", "$1:");
-                    String hexDigest2 = new String(Hex.encode(digest2.digest(x509.getEncoded())))
-                            .replaceAll("(..)", "$1:");
-
-                    textView.setText(getString(R.string.certificate_info,
-                            x509.getSubjectDN().getName(),
-                            x509.getNotBefore().toString(),
-                            x509.getNotAfter().toString(),
-                            hexDigest1.substring(0, hexDigest1.length() - 1),
-                            hexDigest2.substring(0, hexDigest2.length() - 1)));
-                } catch (NoSuchAlgorithmException e) {
-                    e.printStackTrace();
-                    textView.setText(x509.toString());
-                }
-                new MaterialAlertDialogBuilder(MumlaActivity.this)
-                        .setTitle(R.string.untrusted_certificate)
-                        .setView(layout)
-                        .setPositiveButton(R.string.allow, (dialog, which) -> {
-                            try {
-                                String alias = lastServer.getHost();
-                                KeyStore trustStore = MumlaTrustStore.getTrustStore(MumlaActivity.this);
-                                trustStore.setCertificateEntry(alias, x509);
-                                MumlaTrustStore.saveTrustStore(MumlaActivity.this, trustStore);
-                                Toast.makeText(MumlaActivity.this, R.string.trust_added, Toast.LENGTH_LONG).show();
-                                connectToServer(lastServer);
-                            } catch (Exception e) {
-                                e.printStackTrace();
-                                Toast.makeText(MumlaActivity.this, R.string.trust_add_failed, Toast.LENGTH_LONG).show();
-                            }
-                        })
-                        .setNegativeButton(android.R.string.cancel, null)
-                        .show();
-            } catch (CertificateException e) {
-                e.printStackTrace();
-            }
+@Override
+public void onTLSHandshakeFailed(X509Certificate[] chain) {
+    if (chain.length == 0) return;
+    
+    final Server lastServer = getService().getTargetServer();
+    
+    // --- MODIFIKASI: Auto-trust untuk Embedded Server ---
+    if (lastServer != null && 
+        EMBEDDED_SERVER_HOST.equalsIgnoreCase(lastServer.getHost()) &&
+        lastServer.getPort() == EMBEDDED_SERVER_PORT) {
+        
+        // Langsung trust tanpa tanya user
+        try {
+            X509Certificate x509 = chain[0];
+            String alias = lastServer.getHost();
+            KeyStore trustStore = MumlaTrustStore.getTrustStore(MumlaActivity.this);
+            trustStore.setCertificateEntry(alias, x509);
+            MumlaTrustStore.saveTrustStore(MumlaActivity.this, trustStore);
+            
+            Log.d(TAG, "Auto-trusted certificate for embedded server: " + alias);
+            connectToServer(lastServer);
+            return; // Keluar, jangan tampilkan dialog
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to auto-trust embedded server cert", e);
+            // Kalau gagal auto-trust, fallback ke dialog biasa
         }
+    }
+    // -----------------------------------------------------
+
+    // Dialog asli untuk server lain (tetap dipertahankan)
+    try {
+        final X509Certificate x509 = chain[0];
+        View layout = getLayoutInflater().inflate(R.layout.certificate_info, null);
+        TextView textView = layout.findViewById(R.id.certificate_info_text);
+        try {
+            MessageDigest digest1 = MessageDigest.getInstance("SHA-1");
+            MessageDigest digest2 = MessageDigest.getInstance("SHA-256");
+            String hexDigest1 = new String(Hex.encode(digest1.digest(x509.getEncoded())))
+                    .replaceAll("(..)", "$1:");
+            String hexDigest2 = new String(Hex.encode(digest2.digest(x509.getEncoded())))
+                    .replaceAll("(..)", "$1:");
+
+            textView.setText(getString(R.string.certificate_info,
+                    x509.getSubjectDN().getName(),
+                    x509.getNotBefore().toString(),
+                    x509.getNotAfter().toString(),
+                    hexDigest1.substring(0, hexDigest1.length() - 1),
+                    hexDigest2.substring(0, hexDigest2.length() - 1)));
+        } catch (NoSuchAlgorithmException e) {
+            e.printStackTrace();
+            textView.setText(x509.toString());
+        }
+        new MaterialAlertDialogBuilder(MumlaActivity.this)
+                .setTitle(R.string.untrusted_certificate)
+                .setView(layout)
+                .setPositiveButton(R.string.allow, (dialog, which) -> {
+                    try {
+                        String alias = lastServer.getHost();
+                        KeyStore trustStore = MumlaTrustStore.getTrustStore(MumlaActivity.this);
+                        trustStore.setCertificateEntry(alias, x509);
+                        MumlaTrustStore.saveTrustStore(MumlaActivity.this, trustStore);
+                        Toast.makeText(MumlaActivity.this, R.string.trust_added, Toast.LENGTH_LONG).show();
+                        connectToServer(lastServer);
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        Toast.makeText(MumlaActivity.this, R.string.trust_add_failed, Toast.LENGTH_LONG).show();
+                    }
+                })
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    } catch (CertificateException e) {
+        e.printStackTrace();
+    }
+}
 
         @Override
         public void onPermissionDenied(String reason) {
