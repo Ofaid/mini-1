@@ -155,7 +155,7 @@ public class MumlaActivity extends AppCompatActivity implements ListView.OnItemC
     private AlertDialog mErrorDialog;
 
     private final List<HumlaServiceFragment> mServiceFragments = new ArrayList<>();
-//==================
+
    private final ServiceConnection mConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
@@ -168,8 +168,6 @@ public class MumlaActivity extends AppCompatActivity implements ListView.OnItemC
             for (HumlaServiceFragment fragment : mServiceFragments)
                 fragment.setServiceBound(true);
 
-            // Auto connect jika service siap DAN setup sudah selesai
-            // (Dialog akan dimunculkan oleh onResume jika setup belum selesai)
             if (!EMBEDDED_SERVER_HOST.isEmpty() && !mAutoConnectAttempted) {
                 mAutoConnectAttempted = true;
                 
@@ -184,8 +182,6 @@ public class MumlaActivity extends AppCompatActivity implements ListView.OnItemC
                         loadDrawerFragment(DrawerAdapter.ITEM_FAVOURITES);
                     }
                 } else {
-                    // Jika belum setup, tampilkan list favorites sementara 
-                    // sampai onResume memicu dialog
                     loadDrawerFragment(DrawerAdapter.ITEM_FAVOURITES);
                 }
             } 
@@ -199,10 +195,30 @@ public class MumlaActivity extends AppCompatActivity implements ListView.OnItemC
         }
     };
     
-//======================
     private final HumlaObserver mObserver = new HumlaObserver() {
         @Override
         public void onConnected() {
+            // --- FIX UTAMA: PAKSA SYNC STATE SAAT KONEKSI READY ---
+            // Trigger re-set channel ID untuk memaksa server kirim full state dump
+            // (pesan teks, user list, dan membuka gate audio stream)
+            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+                if (mService != null && mService.isConnected()) {
+                    try {
+                        IHumlaSession session = getService().HumlaSession();
+                        if (session != null) {
+                            int currentChannel = session.getChannelId();
+                            if (currentChannel > 0) {
+                                session.setChannel(currentChannel);
+                                Log.d(TAG, "Force state sync triggered in onConnected");
+                            }
+                        }
+                    } catch (Exception e) {
+                        Log.w(TAG, "Force sync in onConnected failed", e);
+                    }
+                }
+            }, 1000); 
+            // -------------------------------------------------------
+
             if (mSettings.shouldStartUpInPinnedMode()) {
                 loadDrawerFragment(DrawerAdapter.ITEM_PINNED_CHANNELS);
             } else {
@@ -227,80 +243,76 @@ public class MumlaActivity extends AppCompatActivity implements ListView.OnItemC
             supportInvalidateOptionsMenu();
             updateConnectionState(getService());
         }
-@Override
-public void onTLSHandshakeFailed(X509Certificate[] chain) {
-    if (chain.length == 0) return;
-    
-    final Server lastServer = getService().getTargetServer();
-    
-    // --- MODIFIKASI: Auto-trust untuk Embedded Server ---
-    if (lastServer != null && 
-        EMBEDDED_SERVER_HOST.equalsIgnoreCase(lastServer.getHost()) &&
-        lastServer.getPort() == EMBEDDED_SERVER_PORT) {
-        
-        // Langsung trust tanpa tanya user
-        try {
-            X509Certificate x509 = chain[0];
-            String alias = lastServer.getHost();
-            KeyStore trustStore = MumlaTrustStore.getTrustStore(MumlaActivity.this);
-            trustStore.setCertificateEntry(alias, x509);
-            MumlaTrustStore.saveTrustStore(MumlaActivity.this, trustStore);
+
+        @Override
+        public void onTLSHandshakeFailed(X509Certificate[] chain) {
+            if (chain.length == 0) return;
             
-            Log.d(TAG, "Auto-trusted certificate for embedded server: " + alias);
-            connectToServer(lastServer);
-            return; // Keluar, jangan tampilkan dialog
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to auto-trust embedded server cert", e);
-            // Kalau gagal auto-trust, fallback ke dialog biasa
-        }
-    }
-    // -----------------------------------------------------
+            final Server lastServer = getService().getTargetServer();
+            
+            if (lastServer != null && 
+                EMBEDDED_SERVER_HOST.equalsIgnoreCase(lastServer.getHost()) &&
+                lastServer.getPort() == EMBEDDED_SERVER_PORT) {
+                
+                try {
+                    X509Certificate x509 = chain[0];
+                    String alias = lastServer.getHost();
+                    KeyStore trustStore = MumlaTrustStore.getTrustStore(MumlaActivity.this);
+                    trustStore.setCertificateEntry(alias, x509);
+                    MumlaTrustStore.saveTrustStore(MumlaActivity.this, trustStore);
+                    
+                    Log.d(TAG, "Auto-trusted certificate for embedded server: " + alias);
+                    connectToServer(lastServer);
+                    return;
+                } catch (Exception e) {
+                    Log.e(TAG, "Failed to auto-trust embedded server cert", e);
+                }
+            }
 
-    // Dialog asli untuk server lain (tetap dipertahankan)
-    try {
-        final X509Certificate x509 = chain[0];
-        View layout = getLayoutInflater().inflate(R.layout.certificate_info, null);
-        TextView textView = layout.findViewById(R.id.certificate_info_text);
-        try {
-            MessageDigest digest1 = MessageDigest.getInstance("SHA-1");
-            MessageDigest digest2 = MessageDigest.getInstance("SHA-256");
-            String hexDigest1 = new String(Hex.encode(digest1.digest(x509.getEncoded())))
-                    .replaceAll("(..)", "$1:");
-            String hexDigest2 = new String(Hex.encode(digest2.digest(x509.getEncoded())))
-                    .replaceAll("(..)", "$1:");
+            try {
+                final X509Certificate x509 = chain[0];
+                View layout = getLayoutInflater().inflate(R.layout.certificate_info, null);
+                TextView textView = layout.findViewById(R.id.certificate_info_text);
+                try {
+                    MessageDigest digest1 = MessageDigest.getInstance("SHA-1");
+                    MessageDigest digest2 = MessageDigest.getInstance("SHA-256");
+                    String hexDigest1 = new String(Hex.encode(digest1.digest(x509.getEncoded())))
+                            .replaceAll("(..)", "$1:");
+                    String hexDigest2 = new String(Hex.encode(digest2.digest(x509.getEncoded())))
+                            .replaceAll("(..)", "$1:");
 
-            textView.setText(getString(R.string.certificate_info,
-                    x509.getSubjectDN().getName(),
-                    x509.getNotBefore().toString(),
-                    x509.getNotAfter().toString(),
-                    hexDigest1.substring(0, hexDigest1.length() - 1),
-                    hexDigest2.substring(0, hexDigest2.length() - 1)));
-        } catch (NoSuchAlgorithmException e) {
-            e.printStackTrace();
-            textView.setText(x509.toString());
+                    textView.setText(getString(R.string.certificate_info,
+                            x509.getSubjectDN().getName(),
+                            x509.getNotBefore().toString(),
+                            x509.getNotAfter().toString(),
+                            hexDigest1.substring(0, hexDigest1.length() - 1),
+                            hexDigest2.substring(0, hexDigest2.length() - 1)));
+                } catch (NoSuchAlgorithmException e) {
+                    e.printStackTrace();
+                    textView.setText(x509.toString());
+                }
+                new MaterialAlertDialogBuilder(MumlaActivity.this)
+                        .setTitle(R.string.untrusted_certificate)
+                        .setView(layout)
+                        .setPositiveButton(R.string.allow, (dialog, which) -> {
+                            try {
+                                String alias = lastServer.getHost();
+                                KeyStore trustStore = MumlaTrustStore.getTrustStore(MumlaActivity.this);
+                                trustStore.setCertificateEntry(alias, x509);
+                                MumlaTrustStore.saveTrustStore(MumlaActivity.this, trustStore);
+                                Toast.makeText(MumlaActivity.this, R.string.trust_added, Toast.LENGTH_LONG).show();
+                                connectToServer(lastServer);
+                            } catch (Exception e) {
+                                e.printStackTrace();
+                                Toast.makeText(MumlaActivity.this, R.string.trust_add_failed, Toast.LENGTH_LONG).show();
+                            }
+                        })
+                        .setNegativeButton(android.R.string.cancel, null)
+                        .show();
+            } catch (CertificateException e) {
+                e.printStackTrace();
+            }
         }
-        new MaterialAlertDialogBuilder(MumlaActivity.this)
-                .setTitle(R.string.untrusted_certificate)
-                .setView(layout)
-                .setPositiveButton(R.string.allow, (dialog, which) -> {
-                    try {
-                        String alias = lastServer.getHost();
-                        KeyStore trustStore = MumlaTrustStore.getTrustStore(MumlaActivity.this);
-                        trustStore.setCertificateEntry(alias, x509);
-                        MumlaTrustStore.saveTrustStore(MumlaActivity.this, trustStore);
-                        Toast.makeText(MumlaActivity.this, R.string.trust_added, Toast.LENGTH_LONG).show();
-                        connectToServer(lastServer);
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        Toast.makeText(MumlaActivity.this, R.string.trust_add_failed, Toast.LENGTH_LONG).show();
-                    }
-                })
-                .setNegativeButton(android.R.string.cancel, null)
-                .show();
-    } catch (CertificateException e) {
-        e.printStackTrace();
-    }
-}
 
         @Override
         public void onPermissionDenied(String reason) {
@@ -389,8 +401,6 @@ public void onTLSHandshakeFailed(X509Certificate[] chain) {
 
         setVolumeControlStream(mSettings.isHandsetMode() ?
                 AudioManager.STREAM_VOICE_CALL : AudioManager.STREAM_MUSIC);
-        
-        // Jangan load fragment default di sini, biarkan onServiceConnected yang handle
     }
 
     @Override
@@ -399,17 +409,15 @@ public void onTLSHandshakeFailed(X509Certificate[] chain) {
         Intent connectIntent = new Intent(this, MumlaService.class);
         bindService(connectIntent, mConnection, 0);
 
-        // --- LOGIKA DIALOG UTAMA DI SINI ---
         if (!EMBEDDED_SERVER_HOST.isEmpty() && !mAutoConnectAttempted) {
             boolean isSetupDone = PreferenceManager.getDefaultSharedPreferences(this)
                     .getBoolean(PREF_EMBEDDED_SETUP_DONE, false);
             
-            // Tampilkan dialog HANYA JIKA setup belum pernah dilakukan
             if (!isSetupDone) {
                 Server embedded = findOrCreateEmbeddedServer();
                 if (embedded != null) {
                     showEmbeddedServerCredentialsDialog(embedded);
-                    mAutoConnectAttempted = true; // Cegah pemanggilan berulang
+                    mAutoConnectAttempted = true;
                 }
             }
         }
@@ -509,8 +517,6 @@ public void onTLSHandshakeFailed(X509Certificate[] chain) {
         loadDrawerFragment((int) id);
     }
 
-    // --- METHOD BARU UNTUK EMBEDDED SERVER ---
-
     private void showEmbeddedServerCredentialsDialog(final Server embedded) {
         int pad = (int) (getResources().getDisplayMetrics().density * 16.0f);
         LinearLayout layout = new LinearLayout(this);
@@ -543,7 +549,6 @@ public void onTLSHandshakeFailed(X509Certificate[] chain) {
                     embedded.setUsername(username);
                     mDatabase.updateServer(embedded);
                     
-                    // SIMPAN FLAG SETUP SELESAI
                     PreferenceManager.getDefaultSharedPreferences(this)
                             .edit()
                             .putBoolean(PREF_EMBEDDED_SETUP_DONE, true)
@@ -595,7 +600,6 @@ public void onTLSHandshakeFailed(X509Certificate[] chain) {
             }
         }
         
-        // Buat server baru dengan username kosong sementara
         Server server = new Server(-1L, EMBEDDED_SERVER_NAME, EMBEDDED_SERVER_HOST, EMBEDDED_SERVER_PORT, "", "");
         mDatabase.addServer(server);
         return server;
@@ -614,8 +618,6 @@ public void onTLSHandshakeFailed(X509Certificate[] chain) {
             }
         }
     }
-
-    // -----------------------------------------
 
     private void loadDrawerFragment(int fragmentId) {
         Class<? extends Fragment> fragmentClass = null;
